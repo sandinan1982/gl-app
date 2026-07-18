@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: gl-app
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PORT
+        value: 3000
+    disk:
+      name: gl-data
+      mountPath: /app/backend/data
+      sizeGB: 1
