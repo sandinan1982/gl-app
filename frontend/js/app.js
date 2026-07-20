@@ -9,6 +9,7 @@ const state = {
   permissions: JSON.parse(localStorage.getItem('gl_perms') || 'null'),
   branches: [],
   coa: [],
+  departments: [],
   currentPage: null
 };
 
@@ -123,6 +124,7 @@ async function bootApp() {
   renderMenu();
   try { state.branches = await api('/branches'); } catch (e) { state.branches = []; }
   try { state.coa = await api('/coa'); } catch (e) { state.coa = []; }
+  try { state.departments = await api('/departments'); } catch (e) { state.departments = []; }
   const first = MENU_STRUCTURE.flatMap(g => g.items).find(i => hasPerm(i.kode, 'view'));
   if (first) goPage(first.page, first.label);
   else document.getElementById('content').innerHTML = '<div class="msg error">Anda tidak memiliki akses menu apapun.</div>';
@@ -133,6 +135,11 @@ function branchOptions(selected) {
 }
 function coaOptions(selected) {
   return state.coa.filter(c => c.status === 'AKTIF').map(c => `<option value="${c.kode_account}" ${c.kode_account === selected ? 'selected' : ''}>${esc(c.kode_account)} - ${esc(c.nama_account)}</option>`).join('');
+}
+function deptOptions(cabangId, selected) {
+  const list = state.departments.filter(d => d.status === 'AKTIF' && String(d.cabang_id) === String(cabangId));
+  return '<option value="">-- tanpa department --</option>' +
+    list.map(d => `<option value="${esc(d.kode_department)}" ${d.kode_department === selected ? 'selected' : ''}>${esc(d.kode_department)} - ${esc(d.nama_department)}</option>`).join('');
 }
 
 // ======================================================================
@@ -306,6 +313,7 @@ function renderJurnalForm(existing) {
     </div>`;
   renderDetailRows(readOnly);
   if (!readOnly) document.getElementById('btnAddRow').onclick = () => { jurnalRows.push({ kode_account: '', kode_department: '', debit: 0, kredit: 0, keterangan: '' }); renderDetailRows(readOnly); };
+  if (!readOnly) document.getElementById('j_cabang').onchange = () => renderDetailRows(readOnly);
   document.getElementById('btnCancel').onclick = () => { area.innerHTML = ''; };
   if (!readOnly) document.getElementById('btnSave').onclick = async () => {
     const body = {
@@ -326,11 +334,13 @@ function renderJurnalForm(existing) {
 
 function renderDetailRows(readOnly) {
   const body = document.getElementById('jurnalDetailBody');
+  const cabangSel = document.getElementById('j_cabang');
+  const cabangId = cabangSel ? cabangSel.value : null;
   body.innerHTML = jurnalRows.map((r, i) => `<tr>
     <td><select onchange="jurnalRows[${i}].kode_account=this.value" ${readOnly ? 'disabled' : ''}><option value="">-- pilih --</option>${coaOptions(r.kode_account)}</select></td>
-    <td><input value="${esc(r.kode_department)}" onchange="jurnalRows[${i}].kode_department=this.value" ${readOnly ? 'disabled' : ''} placeholder="opsional"></td>
-    <td><input type="number" step="0.01" value="${r.debit || 0}" style="width:110px" onchange="jurnalRows[${i}].debit=parseFloat(this.value)||0; updateTotals();" ${readOnly ? 'disabled' : ''}></td>
-    <td><input type="number" step="0.01" value="${r.kredit || 0}" style="width:110px" onchange="jurnalRows[${i}].kredit=parseFloat(this.value)||0; updateTotals();" ${readOnly ? 'disabled' : ''}></td>
+    <td><select onchange="jurnalRows[${i}].kode_department=this.value" ${readOnly ? 'disabled' : ''}>${deptOptions(cabangId, r.kode_department)}</select></td>
+    <td><input type="number" step="0.01" value="${r.debit || 0}" style="width:110px" onchange="handleAmountChange(${i}, 'debit', parseFloat(this.value)||0)" ${readOnly ? 'disabled' : ''}></td>
+    <td><input type="number" step="0.01" value="${r.kredit || 0}" style="width:110px" onchange="handleAmountChange(${i}, 'kredit', parseFloat(this.value)||0)" ${readOnly ? 'disabled' : ''}></td>
     <td><input value="${esc(r.keterangan)}" onchange="jurnalRows[${i}].keterangan=this.value" ${readOnly ? 'disabled' : ''}></td>
     <td>${!readOnly ? `<button class="btn danger small" onclick="removeJurnalRow(${i})">x</button>` : ''}</td>
   </tr>`).join('');
@@ -344,6 +354,26 @@ window.updateTotals = function () {
   document.getElementById('totKredit').textContent = fmtNum(tk);
 };
 window.jurnalRows = jurnalRows;
+
+// Ketika salah satu sisi (debit/kredit) diisi, otomatis isikan sisi lawan pada baris kosong lain
+// supaya jurnal cepat balance tanpa mengetik dua kali.
+window.handleAmountChange = function (i, field, value) {
+  jurnalRows[i][field] = value;
+  if (value > 0) {
+    const opposite = field === 'debit' ? 'kredit' : 'debit';
+    let target = -1;
+    for (let j = i + 1; j < jurnalRows.length; j++) {
+      if (!jurnalRows[j].debit && !jurnalRows[j].kredit) { target = j; break; }
+    }
+    if (target === -1) {
+      for (let j = 0; j < jurnalRows.length; j++) {
+        if (j !== i && !jurnalRows[j].debit && !jurnalRows[j].kredit) { target = j; break; }
+      }
+    }
+    if (target !== -1) jurnalRows[target][opposite] = value;
+  }
+  renderDetailRows(false);
+};
 
 window.viewJurnal = async function (no_bukti) {
   const data = await api('/journal/' + no_bukti);
