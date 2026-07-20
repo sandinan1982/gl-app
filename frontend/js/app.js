@@ -9,6 +9,7 @@ const state = {
   permissions: JSON.parse(localStorage.getItem('gl_perms') || 'null'),
   branches: [],
   coa: [],
+  categories: [],
   departments: [],
   activeCabang: localStorage.getItem('gl_active_cabang') || null,
   currentPage: null
@@ -70,6 +71,7 @@ document.getElementById('logoutBtn').addEventListener('click', () => {
 const MENU_STRUCTURE = [
   { group: 'Master Data', items: [
     { kode: 'MASTER_CABANG', label: 'Kode Cabang', page: 'cabang' },
+    { kode: 'MASTER_KATEGORI', label: 'Kategori Akun', page: 'kategori' },
     { kode: 'MASTER_COA', label: 'Kode Account', page: 'coa' },
     { kode: 'MASTER_DEPT', label: 'Kode Department', page: 'dept' }
   ]},
@@ -125,6 +127,7 @@ async function bootApp() {
   document.getElementById('userLabel').textContent = `${state.user.nama_lengkap || state.user.username} (${state.user.role}) - ${state.user.cabang_nama || ''}`;
   renderMenu();
   try { state.branches = await api('/branches'); } catch (e) { state.branches = []; }
+  try { state.categories = await api('/categories'); } catch (e) { state.categories = []; }
   try { state.coa = await api('/coa'); } catch (e) { state.coa = []; }
   try { state.departments = await api('/departments'); } catch (e) { state.departments = []; }
 
@@ -167,7 +170,14 @@ function renderBranchSwitcher() {
   }
 }
 function coaOptions(selected) {
-  return state.coa.filter(c => c.status === 'AKTIF').map(c => `<option value="${c.kode_account}" ${c.kode_account === selected ? 'selected' : ''}>${esc(c.kode_account)} - ${esc(c.nama_account)}</option>`).join('');
+  return state.coa.filter(c => c.status === 'AKTIF' && !c.is_header).map(c => `<option value="${c.kode_account}" ${c.kode_account === selected ? 'selected' : ''}>${esc(c.kode_account)} - ${esc(c.nama_account)}</option>`).join('');
+}
+function categoryOptions(selected) {
+  return state.categories.filter(c => c.status === 'AKTIF').map(c => `<option value="${c.kode_kategori}" ${c.kode_kategori === selected ? 'selected' : ''}>${esc(c.kode_kategori)} - ${esc(c.nama_kategori)} (${esc(c.kelompok_laporan)})</option>`).join('');
+}
+function parentAccountOptions(selected) {
+  return '<option value="">-- tanpa induk --</option>' +
+    state.coa.filter(c => c.is_header && c.status === 'AKTIF').map(c => `<option value="${c.kode_account}" ${c.kode_account === selected ? 'selected' : ''}>${esc(c.kode_account)} - ${esc(c.nama_account)}</option>`).join('');
 }
 function deptOptions(cabangId, selected) {
   const list = state.departments.filter(d => d.status === 'AKTIF' && String(d.cabang_id) === String(cabangId));
@@ -217,27 +227,78 @@ window.deleteBranch = async function (id) {
   catch (e) { alert(e.message); }
 };
 
-// ---------------------- MASTER: COA ----------------------
+// ---------------------- MASTER: KATEGORI AKUN ----------------------
+PAGES.kategori = async function () {
+  const rows = await api('/categories'); state.categories = rows;
+  const canAdd = hasPerm('MASTER_KATEGORI', 'add'), canDel = hasPerm('MASTER_KATEGORI', 'delete');
+  const kelompokLabel = { ASET: 'Aset (Neraca)', KEWAJIBAN: 'Kewajiban (Neraca)', MODAL: 'Modal (Neraca)', PENDAPATAN: 'Pendapatan (Laba Rugi)', BEBAN: 'Beban (Laba Rugi)' };
+  document.getElementById('content').innerHTML = `
+    <div class="card">
+      <p class="small-text">Kategori Akun menentukan pengelompokan Kode Account ke dalam Neraca atau Laba Rugi. Anda bisa membuat kategori sebanyak yang dibutuhkan (contoh: "Aset Lancar" dan "Aset Tetap" sama-sama termasuk kelompok Aset).</p>
+      ${canAdd ? `<div class="toolbar">
+        <div class="field"><label>Kode Kategori</label><input id="f_kode" maxlength="20"></div>
+        <div class="field"><label>Nama Kategori</label><input id="f_nama"></div>
+        <div class="field"><label>Kelompok Laporan</label>
+          <select id="f_kelompok"><option value="ASET">Aset (Neraca)</option><option value="KEWAJIBAN">Kewajiban (Neraca)</option>
+          <option value="MODAL">Modal (Neraca)</option><option value="PENDAPATAN">Pendapatan (Laba Rugi)</option><option value="BEBAN">Beban (Laba Rugi)</option></select></div>
+        <div class="field"><label>Saldo Normal</label><select id="f_saldo"><option value="DEBIT">DEBIT</option><option value="KREDIT">KREDIT</option></select></div>
+        <button class="btn" id="btnAdd">+ Tambah Kategori</button>
+      </div>` : ''}
+      <div id="msgBox"></div>
+      <table><thead><tr><th>Kode</th><th>Nama Kategori</th><th>Kelompok Laporan</th><th>Saldo Normal</th><th>Status</th><th></th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td class="mono">${esc(r.kode_kategori)}</td><td>${esc(r.nama_kategori)}</td><td>${esc(kelompokLabel[r.kelompok_laporan] || r.kelompok_laporan)}</td><td>${esc(r.saldo_normal)}</td>
+        <td><span class="badge ${r.status === 'AKTIF' ? 'posted' : 'closed'}">${r.status}</span></td>
+        <td>${canDel ? `<button class="btn danger small" onclick="deleteKategori('${r.kode_kategori}')">Hapus</button>` : ''}</td>
+      </tr>`).join('')}</tbody></table>
+    </div>`;
+  if (canAdd) document.getElementById('btnAdd').onclick = async () => {
+    const body = {
+      kode_kategori: document.getElementById('f_kode').value.trim(),
+      nama_kategori: document.getElementById('f_nama').value.trim(),
+      kelompok_laporan: document.getElementById('f_kelompok').value,
+      saldo_normal: document.getElementById('f_saldo').value
+    };
+    try { await api('/categories', { method: 'POST', body: JSON.stringify(body) }); goPage('kategori', 'Kategori Akun'); }
+    catch (e) { showMsg('msgBox', e.message, 'error'); }
+  };
+};
+window.deleteKategori = async function (kode) {
+  if (!confirm('Hapus kategori ini?')) return;
+  try { await api('/categories/' + kode, { method: 'DELETE' }); goPage('kategori', 'Kategori Akun'); } catch (e) { alert(e.message); }
+};
+
+// ---------------------- MASTER: COA (Akun Induk & Akun Anak) ----------------------
+let coaListCache = [];
 PAGES.coa = async function () {
-  const rows = await api('/coa'); state.coa = rows;
-  const canAdd = hasPerm('MASTER_COA', 'add'), canDel = hasPerm('MASTER_COA', 'delete');
+  const rows = await api('/coa'); state.coa = rows; coaListCache = rows;
+  if (!state.categories.length) { try { state.categories = await api('/categories'); } catch (e) { /* ignore */ } }
+  const canAdd = hasPerm('MASTER_COA', 'add'), canDel = hasPerm('MASTER_COA', 'delete'), canEdit = hasPerm('MASTER_COA', 'edit');
   document.getElementById('content').innerHTML = `
     <div class="card">
       ${canAdd ? `<div class="toolbar">
         <div class="field"><label>Kode Account</label><input id="f_kode" maxlength="20"></div>
         <div class="field"><label>Nama Account</label><input id="f_nama"></div>
-        <div class="field"><label>Kategori</label>
-          <select id="f_kategori"><option value="ASET">ASET</option><option value="KEWAJIBAN">KEWAJIBAN</option>
-          <option value="MODAL">MODAL</option><option value="PENDAPATAN">PENDAPATAN</option><option value="BEBAN">BEBAN</option></select></div>
+        <div class="field"><label>Kategori</label><select id="f_kategori">${categoryOptions()}</select></div>
         <div class="field"><label>Saldo Normal</label><select id="f_saldo"><option value="DEBIT">DEBIT</option><option value="KREDIT">KREDIT</option></select></div>
+        <div class="field"><label>Akun Induk Dari</label><select id="f_parent">${parentAccountOptions()}</select></div>
+        <div class="field"><label><input type="checkbox" id="f_header"> Jadikan Akun Induk (Header)</label></div>
         <button class="btn" id="btnAdd">+ Tambah Account</button>
       </div>` : ''}
+      <p class="small-text">Buat dulu <strong>Akun Induk</strong> (centang "Jadikan Akun Induk", kosongkan "Akun Induk Dari"), baru buat <strong>Akun Anak</strong> di bawahnya (pilih induknya, jangan centang header). Akun Induk hanya untuk pengelompokan laporan &mdash; tidak bisa dipakai langsung untuk input jurnal.</p>
       <div id="msgBox"></div>
-      <table><thead><tr><th>Kode</th><th>Nama Account</th><th>Kategori</th><th>Saldo Normal</th><th>Status</th><th></th></tr></thead>
+      <div id="editArea"></div>
+      <table><thead><tr><th>Kode</th><th>Nama Account</th><th>Tipe</th><th>Induk</th><th>Kategori</th><th>Saldo Normal</th><th>Status</th><th></th></tr></thead>
       <tbody>${rows.map(r => `<tr>
-        <td class="mono">${esc(r.kode_account)}</td><td>${esc(r.nama_account)}</td><td>${esc(r.kategori)}</td><td>${esc(r.saldo_normal)}</td>
+        <td class="mono">${esc(r.kode_account)}</td><td>${r.is_header ? '<strong>' + esc(r.nama_account) + '</strong>' : '&nbsp;&nbsp;&nbsp;' + esc(r.nama_account)}</td>
+        <td><span class="badge ${r.is_header ? 'open' : 'posted'}">${r.is_header ? 'Induk' : 'Anak'}</span></td>
+        <td>${esc(r.nama_induk || '-')}</td>
+        <td>${esc(r.nama_kategori || r.kategori)}</td><td>${esc(r.saldo_normal)}</td>
         <td><span class="badge ${r.status === 'AKTIF' ? 'posted' : 'closed'}">${r.status}</span></td>
-        <td>${canDel ? `<button class="btn danger small" onclick="deleteCoa('${r.kode_account}')">Hapus</button>` : ''}</td>
+        <td>
+          ${canEdit ? `<button class="btn secondary small" onclick="editCoaForm('${r.kode_account}')">Edit</button>` : ''}
+          ${canDel ? `<button class="btn danger small" onclick="deleteCoa('${r.kode_account}')">Hapus</button>` : ''}
+        </td>
       </tr>`).join('')}</tbody></table>
     </div>`;
   if (canAdd) document.getElementById('btnAdd').onclick = async () => {
@@ -245,10 +306,48 @@ PAGES.coa = async function () {
       kode_account: document.getElementById('f_kode').value.trim(),
       nama_account: document.getElementById('f_nama').value.trim(),
       kategori: document.getElementById('f_kategori').value,
-      saldo_normal: document.getElementById('f_saldo').value
+      saldo_normal: document.getElementById('f_saldo').value,
+      parent_kode: document.getElementById('f_parent').value || null,
+      is_header: document.getElementById('f_header').checked
     };
     try { await api('/coa', { method: 'POST', body: JSON.stringify(body) }); goPage('coa', 'Kode Account'); }
     catch (e) { showMsg('msgBox', e.message, 'error'); }
+  };
+};
+window.editCoaForm = function (kode) {
+  const r = coaListCache.find(x => x.kode_account === kode);
+  if (!r) return;
+  const area = document.getElementById('editArea');
+  area.innerHTML = `
+    <div class="card" style="background:#f8fafc;">
+      <h3 style="margin-top:0;">Edit Account: ${esc(r.kode_account)}</h3>
+      <div class="form-grid">
+        <div><label>Nama Account</label><input id="e_nama" value="${esc(r.nama_account)}"></div>
+        <div><label>Kategori</label><select id="e_kategori">${categoryOptions(r.kategori)}</select></div>
+        <div><label>Saldo Normal</label><select id="e_saldo"><option value="DEBIT" ${r.saldo_normal === 'DEBIT' ? 'selected' : ''}>DEBIT</option><option value="KREDIT" ${r.saldo_normal === 'KREDIT' ? 'selected' : ''}>KREDIT</option></select></div>
+        <div><label>Akun Induk Dari</label><select id="e_parent">${parentAccountOptions(r.parent_kode)}</select></div>
+        <div><label><input type="checkbox" id="e_header" ${r.is_header ? 'checked' : ''}> Jadikan Akun Induk (Header)</label></div>
+        <div><label>Status</label><select id="e_status"><option value="AKTIF" ${r.status === 'AKTIF' ? 'selected' : ''}>AKTIF</option><option value="NONAKTIF" ${r.status !== 'AKTIF' ? 'selected' : ''}>NONAKTIF</option></select></div>
+      </div>
+      <div id="editMsg"></div>
+      <button class="btn" id="btnSaveEdit">Simpan Perubahan</button>
+      <button class="btn secondary" id="btnCancelEdit">Batal</button>
+    </div>`;
+  document.getElementById('btnCancelEdit').onclick = () => { area.innerHTML = ''; };
+  document.getElementById('btnSaveEdit').onclick = async () => {
+    const body = {
+      nama_account: document.getElementById('e_nama').value.trim(),
+      kategori: document.getElementById('e_kategori').value,
+      saldo_normal: document.getElementById('e_saldo').value,
+      parent_kode: document.getElementById('e_parent').value || null,
+      is_header: document.getElementById('e_header').checked,
+      status: document.getElementById('e_status').value
+    };
+    try {
+      await api('/coa/' + kode, { method: 'PUT', body: JSON.stringify(body) });
+      area.innerHTML = '';
+      goPage('coa', 'Kode Account');
+    } catch (e) { showMsg('editMsg', e.message, 'error'); }
   };
 };
 window.deleteCoa = async function (kode) {

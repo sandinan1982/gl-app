@@ -28,14 +28,15 @@ router.get('/neraca', requirePermission('LAP_NERACA', 'view'), scopeBranch, (req
   if (!sampai) return res.status(400).json({ error: 'Parameter tanggal (sampai) wajib diisi.' });
   const branch = req.branchFilter || cabang_id || null;
 
-  let sql = `SELECT coa.kode_account, coa.nama_account, coa.kategori, coa.saldo_normal,
+  let sql = `SELECT coa.kode_account, coa.nama_account, coa.saldo_normal, ac.kelompok_laporan,
       COALESCE(SUM(jd.debit),0) tdebit, COALESCE(SUM(jd.kredit),0) tkredit
     FROM chart_of_accounts coa
+    JOIN account_categories ac ON ac.kode_kategori = coa.kategori
     LEFT JOIN journal_detail jd ON jd.kode_account = coa.kode_account
     LEFT JOIN journal_voucher jv ON jv.no_bukti = jd.no_bukti AND jv.status='POSTED' AND jv.tanggal<=?`;
   const params = [sampai];
   if (branch) { sql += ' AND jv.cabang_id=?'; params.push(branch); }
-  sql += ` WHERE coa.kategori IN ('ASET','KEWAJIBAN','MODAL') AND coa.is_header=0
+  sql += ` WHERE ac.kelompok_laporan IN ('ASET','KEWAJIBAN','MODAL') AND coa.is_header=0
     GROUP BY coa.kode_account ORDER BY coa.kode_account`;
 
   const rows = db.prepare(sql).all(...params);
@@ -44,25 +45,26 @@ router.get('/neraca', requirePermission('LAP_NERACA', 'view'), scopeBranch, (req
   rows.forEach(r => {
     const saldo = r.saldo_normal === 'DEBIT' ? (r.tdebit - r.tkredit) : (r.tkredit - r.tdebit);
     const item = { kode_account: r.kode_account, nama_account: r.nama_account, saldo };
-    result[r.kategori].push(item);
-    if (r.kategori === 'ASET') totalAset += saldo;
-    if (r.kategori === 'KEWAJIBAN') totalKewajiban += saldo;
-    if (r.kategori === 'MODAL') totalModal += saldo;
+    result[r.kelompok_laporan].push(item);
+    if (r.kelompok_laporan === 'ASET') totalAset += saldo;
+    if (r.kelompok_laporan === 'KEWAJIBAN') totalKewajiban += saldo;
+    if (r.kelompok_laporan === 'MODAL') totalModal += saldo;
   });
 
   // Laba/rugi berjalan otomatis masuk ke Modal agar neraca balance
-  const plSql = `SELECT coa.kategori, coa.saldo_normal, COALESCE(SUM(jd.debit),0) td, COALESCE(SUM(jd.kredit),0) tk
+  const plSql = `SELECT ac.kelompok_laporan, coa.saldo_normal, COALESCE(SUM(jd.debit),0) td, COALESCE(SUM(jd.kredit),0) tk
     FROM chart_of_accounts coa
+    JOIN account_categories ac ON ac.kode_kategori = coa.kategori
     LEFT JOIN journal_detail jd ON jd.kode_account=coa.kode_account
     LEFT JOIN journal_voucher jv ON jv.no_bukti=jd.no_bukti AND jv.status='POSTED' AND jv.tanggal<=?
     ${branch ? 'AND jv.cabang_id=?' : ''}
-    WHERE coa.kategori IN ('PENDAPATAN','BEBAN') GROUP BY coa.kategori`;
+    WHERE ac.kelompok_laporan IN ('PENDAPATAN','BEBAN') GROUP BY ac.kelompok_laporan`;
   const plParams = branch ? [sampai, branch] : [sampai];
   const plRows = db.prepare(plSql).all(...plParams);
   let labaBerjalan = 0;
   plRows.forEach(r => {
-    if (r.kategori === 'PENDAPATAN') labaBerjalan += (r.tk - r.td);
-    if (r.kategori === 'BEBAN') labaBerjalan -= (r.td - r.tk);
+    if (r.kelompok_laporan === 'PENDAPATAN') labaBerjalan += (r.tk - r.td);
+    if (r.kelompok_laporan === 'BEBAN') labaBerjalan -= (r.td - r.tk);
   });
   result.MODAL.push({ kode_account: '-', nama_account: 'Laba/Rugi Berjalan', saldo: labaBerjalan });
   totalModal += labaBerjalan;
@@ -80,24 +82,25 @@ router.get('/laba-rugi', requirePermission('LAP_LABARUGI', 'view'), scopeBranch,
   if (!dari || !sampai) return res.status(400).json({ error: 'Parameter dari & sampai wajib diisi.' });
   const branch = req.branchFilter || cabang_id || null;
 
-  let sql = `SELECT coa.kode_account, coa.nama_account, coa.kategori, coa.saldo_normal,
+  let sql = `SELECT coa.kode_account, coa.nama_account, coa.saldo_normal, ac.kelompok_laporan,
       COALESCE(SUM(jd.debit),0) tdebit, COALESCE(SUM(jd.kredit),0) tkredit
     FROM chart_of_accounts coa
+    JOIN account_categories ac ON ac.kode_kategori = coa.kategori
     LEFT JOIN journal_detail jd ON jd.kode_account = coa.kode_account
     LEFT JOIN journal_voucher jv ON jv.no_bukti = jd.no_bukti AND jv.status='POSTED'
       AND jv.tanggal BETWEEN ? AND ?`;
   const params = [dari, sampai];
   if (branch) { sql += ' AND jv.cabang_id=?'; params.push(branch); }
-  sql += ` WHERE coa.kategori IN ('PENDAPATAN','BEBAN') AND coa.is_header=0
+  sql += ` WHERE ac.kelompok_laporan IN ('PENDAPATAN','BEBAN') AND coa.is_header=0
     GROUP BY coa.kode_account ORDER BY coa.kode_account`;
 
   const rows = db.prepare(sql).all(...params);
   const pendapatan = [], beban = [];
   let totalPendapatan = 0, totalBeban = 0;
   rows.forEach(r => {
-    const saldo = r.kategori === 'PENDAPATAN' ? (r.tkredit - r.tdebit) : (r.tdebit - r.tkredit);
+    const saldo = r.kelompok_laporan === 'PENDAPATAN' ? (r.tkredit - r.tdebit) : (r.tdebit - r.tkredit);
     const item = { kode_account: r.kode_account, nama_account: r.nama_account, saldo };
-    if (r.kategori === 'PENDAPATAN') { pendapatan.push(item); totalPendapatan += saldo; }
+    if (r.kelompok_laporan === 'PENDAPATAN') { pendapatan.push(item); totalPendapatan += saldo; }
     else { beban.push(item); totalBeban += saldo; }
   });
 
@@ -138,12 +141,13 @@ router.get('/prediksi-laba-rugi', requirePermission('LAP_PREDIKSI', 'view'), sco
   if (!bulan || bulan < 2) bulan = 6;
   if (bulan > 24) bulan = 24;
 
-  let sql = `SELECT coa.kode_account, coa.nama_account, coa.kategori, substr(jv.tanggal,1,7) periode,
+  let sql = `SELECT coa.kode_account, coa.nama_account, ac.kelompok_laporan, substr(jv.tanggal,1,7) periode,
       SUM(jd.debit) tdebit, SUM(jd.kredit) tkredit
     FROM chart_of_accounts coa
+    JOIN account_categories ac ON ac.kode_kategori = coa.kategori
     JOIN journal_detail jd ON jd.kode_account = coa.kode_account
     JOIN journal_voucher jv ON jv.no_bukti = jd.no_bukti AND jv.status='POSTED'
-    WHERE coa.kategori IN ('PENDAPATAN','BEBAN') AND coa.is_header=0`;
+    WHERE ac.kelompok_laporan IN ('PENDAPATAN','BEBAN') AND coa.is_header=0`;
   const params = [];
   if (branch) { sql += ' AND jv.cabang_id=?'; params.push(branch); }
   sql += ` GROUP BY coa.kode_account, periode ORDER BY coa.kode_account, periode`;
@@ -163,8 +167,8 @@ router.get('/prediksi-laba-rugi', requirePermission('LAP_PREDIKSI', 'view'), sco
 
   const accMap = {};
   rows.forEach(r => {
-    if (!accMap[r.kode_account]) accMap[r.kode_account] = { kode_account: r.kode_account, nama_account: r.nama_account, kategori: r.kategori, monthly: {} };
-    const val = r.kategori === 'PENDAPATAN' ? (r.tkredit - r.tdebit) : (r.tdebit - r.tkredit);
+    if (!accMap[r.kode_account]) accMap[r.kode_account] = { kode_account: r.kode_account, nama_account: r.nama_account, kelompok_laporan: r.kelompok_laporan, monthly: {} };
+    const val = r.kelompok_laporan === 'PENDAPATAN' ? (r.tkredit - r.tdebit) : (r.tdebit - r.tkredit);
     accMap[r.kode_account].monthly[r.periode] = val;
   });
 
@@ -178,7 +182,7 @@ router.get('/prediksi-laba-rugi', requirePermission('LAP_PREDIKSI', 'view'), sco
     const series = buildSeries(acc.monthly);
     const prediksi = linearRegressionPredict(series);
     const item = { kode_account: acc.kode_account, nama_account: acc.nama_account, history: series, prediksi };
-    if (acc.kategori === 'PENDAPATAN') { pendapatan.push(item); series.forEach((v, i) => totalPendapatanHistory[i] += v); }
+    if (acc.kelompok_laporan === 'PENDAPATAN') { pendapatan.push(item); series.forEach((v, i) => totalPendapatanHistory[i] += v); }
     else { beban.push(item); series.forEach((v, i) => totalBebanHistory[i] += v); }
   });
 
