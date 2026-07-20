@@ -78,6 +78,7 @@ const MENU_STRUCTURE = [
   { group: 'Transaksi', items: [
     { kode: 'TRX_JURNAL', label: 'Jurnal Transaksi', page: 'jurnal' },
     { kode: 'TRX_POSTING', label: 'Posting Transaksi', page: 'posting' },
+    { kode: 'TRX_BATALPOSTING', label: 'Batal Posting', page: 'batalposting' },
     { kode: 'TRX_TUTUPBUKU', label: 'Tutup Buku', page: 'tutupbuku' },
     { kode: 'TRX_BATALTUTUPBUKU', label: 'Batal Tutup Buku', page: 'batalttutupbuku' }
   ]},
@@ -441,6 +442,7 @@ function renderJurnalForm(existing) {
       <div id="formMsg"></div>
       <div style="margin-top:14px;">
         ${!readOnly ? `<button class="btn" id="btnSave">Simpan Draft</button>` : ''}
+        ${readOnly && hasPerm('TRX_BATALPOSTING', 'post') ? `<button class="btn danger" id="btnUnpost">Batal Posting</button>` : ''}
         <button class="btn secondary" id="btnCancel">Tutup</button>
       </div>
     </div>`;
@@ -448,6 +450,7 @@ function renderJurnalForm(existing) {
   if (!readOnly) document.getElementById('btnAddRow').onclick = () => { jurnalRows.push({ kode_account: '', kode_department: '', debit: 0, kredit: 0, keterangan: '' }); renderDetailRows(readOnly); };
   if (!readOnly) document.getElementById('j_cabang').onchange = () => renderDetailRows(readOnly);
   document.getElementById('btnCancel').onclick = () => { area.innerHTML = ''; };
+  if (readOnly && document.getElementById('btnUnpost')) document.getElementById('btnUnpost').onclick = () => unpostJurnal(h.no_bukti);
   if (!readOnly) document.getElementById('btnSave').onclick = async () => {
     const body = {
       no_bukti: h ? h.no_bukti : document.getElementById('j_nobukti').value.trim(),
@@ -558,6 +561,31 @@ window.postJurnal = async function (no_bukti) {
   if (!confirm(`Posting jurnal ${no_bukti}? Setelah diposting, jurnal tidak dapat diubah.`)) return;
   try { await api(`/journal/${encodeURIComponent(no_bukti)}/post`, { method: 'POST' }); goPage('posting', 'Posting Transaksi'); }
   catch (e) { alert(e.message); }
+};
+
+// ---------------------- TRANSAKSI: BATAL POSTING ----------------------
+PAGES.batalposting = async function () {
+  const qs = state.activeCabang ? '&cabang_id=' + state.activeCabang : '';
+  const posted = (await api('/journal?status=POSTED' + qs));
+  const canUnpost = hasPerm('TRX_BATALPOSTING', 'post');
+  document.getElementById('content').innerHTML = `
+    <div class="card">
+      <p class="small-text">Daftar jurnal berstatus POSTED. Batal posting akan mengembalikan jurnal ke status DRAFT sehingga bisa diedit kembali.</p>
+      <div id="msgBox"></div>
+      <table><thead><tr><th>No Bukti</th><th>Tanggal</th><th>Cabang</th><th>Keterangan</th><th class="right">Debit</th><th class="right">Kredit</th><th></th></tr></thead>
+      <tbody>${posted.map(r => `<tr>
+        <td class="mono">${esc(r.no_bukti)}</td><td>${esc(r.tanggal)}</td><td>${esc(r.nama_cabang)}</td><td>${esc(r.keterangan || '')}</td>
+        <td class="right">${fmtNum(r.total_debit)}</td><td class="right">${fmtNum(r.total_kredit)}</td>
+        <td>${canUnpost ? `<button class="btn danger small" onclick="unpostJurnal('${r.no_bukti}')">Batal Posting</button>` : ''}</td>
+      </tr>`).join('') || `<tr><td colspan="7" class="center small-text">Tidak ada jurnal terposting.</td></tr>`}</tbody></table>
+    </div>`;
+};
+window.unpostJurnal = async function (no_bukti) {
+  if (!confirm(`Batalkan posting jurnal ${no_bukti}? Jurnal akan kembali berstatus DRAFT dan bisa diedit lagi.`)) return;
+  try {
+    await api(`/journal/${encodeURIComponent(no_bukti)}/unpost`, { method: 'POST' });
+    goPage(state.currentPage === 'jurnal' ? 'jurnal' : 'batalposting', state.currentPage === 'jurnal' ? 'Jurnal Transaksi' : 'Batal Posting');
+  } catch (e) { alert(e.message); }
 };
 
 // ---------------------- TRANSAKSI: TUTUP BUKU ----------------------

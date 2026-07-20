@@ -50,6 +50,7 @@ function seed() {
     ['MASTER_DEPT', 'Kode Department', 'Master Data'],
     ['TRX_JURNAL', 'Jurnal Transaksi', 'Transaksi'],
     ['TRX_POSTING', 'Posting Transaksi', 'Transaksi'],
+    ['TRX_BATALPOSTING', 'Batal Posting', 'Transaksi'],
     ['TRX_TUTUPBUKU', 'Tutup Buku', 'Transaksi'],
     ['TRX_BATALTUTUPBUKU', 'Batal Tutup Buku', 'Transaksi'],
     ['LAP_NERACA', 'Laporan Neraca', 'Laporan'],
