@@ -512,10 +512,11 @@ PAGES.harian = async function () {
 };
 
 // ---------------------- SETTING: USER ----------------------
+let userListCache = [], roleListCache = [];
 PAGES.user = async function () {
-  const list = await api('/users');
-  const roles = await api('/roles').catch(() => []);
-  const canAdd = hasPerm('SET_USER', 'add'), canDel = hasPerm('SET_USER', 'delete');
+  const list = await api('/users'); userListCache = list;
+  const roles = await api('/roles').catch(() => []); roleListCache = roles;
+  const canAdd = hasPerm('SET_USER', 'add'), canDel = hasPerm('SET_USER', 'delete'), canEdit = hasPerm('SET_USER', 'edit');
   document.getElementById('content').innerHTML = `
     <div class="card">
       ${canAdd ? `<div class="toolbar">
@@ -528,12 +529,16 @@ PAGES.user = async function () {
         <button class="btn" id="btnAdd">+ Tambah User</button>
       </div>` : ''}
       <div id="msgBox"></div>
+      <div id="editArea"></div>
       <table><thead><tr><th>Username</th><th>Nama</th><th>Role</th><th>Cabang</th><th>Status</th><th></th></tr></thead>
       <tbody>${list.map(r => `<tr>
         <td class="mono">${esc(r.username)}</td><td>${esc(r.nama_lengkap || '')}</td><td>${esc(r.nama_role)}</td>
         <td>${r.akses_semua_cabang ? 'Semua Cabang' : esc(r.nama_cabang || '-')}</td>
         <td><span class="badge ${r.status === 'AKTIF' ? 'posted' : 'closed'}">${r.status}</span></td>
-        <td>${canDel ? `<button class="btn danger small" onclick="deleteUser(${r.id})">Hapus</button>` : ''}</td>
+        <td>
+          ${canEdit ? `<button class="btn secondary small" onclick="editUserForm(${r.id})">Edit</button>` : ''}
+          ${canDel ? `<button class="btn danger small" onclick="deleteUser(${r.id})">Hapus</button>` : ''}
+        </td>
       </tr>`).join('')}</tbody></table>
     </div>`;
   if (canAdd) document.getElementById('btnAdd').onclick = async () => {
@@ -547,6 +552,43 @@ PAGES.user = async function () {
     };
     try { await api('/users', { method: 'POST', body: JSON.stringify(body) }); goPage('user', 'Pembuatan User'); }
     catch (e) { showMsg('msgBox', e.message, 'error'); }
+  };
+};
+window.editUserForm = function (id) {
+  const u = userListCache.find(x => x.id === id);
+  if (!u) return;
+  const area = document.getElementById('editArea');
+  area.innerHTML = `
+    <div class="card" style="background:#f8fafc;">
+      <h3 style="margin-top:0;">Edit User: ${esc(u.username)}</h3>
+      <div class="form-grid">
+        <div><label>Nama Lengkap</label><input id="e_nama" value="${esc(u.nama_lengkap || '')}"></div>
+        <div><label>Password Baru (kosongkan jika tidak diganti)</label><input type="password" id="e_pass"></div>
+        <div><label>Role</label><select id="e_role">${roleListCache.map(r => `<option value="${r.id}" ${r.id === u.role_id ? 'selected' : ''}>${esc(r.nama_role)}</option>`).join('')}</select></div>
+        <div><label>Cabang</label><select id="e_cabang"><option value="">-</option>${branchOptions(u.cabang_id)}</select></div>
+        <div><label><input type="checkbox" id="e_allbranch" ${u.akses_semua_cabang ? 'checked' : ''}> Akses Semua Cabang</label></div>
+        <div><label>Status</label><select id="e_status"><option value="AKTIF" ${u.status === 'AKTIF' ? 'selected' : ''}>AKTIF</option><option value="NONAKTIF" ${u.status !== 'AKTIF' ? 'selected' : ''}>NONAKTIF</option></select></div>
+      </div>
+      <div id="editMsg"></div>
+      <button class="btn" id="btnSaveEdit">Simpan Perubahan</button>
+      <button class="btn secondary" id="btnCancelEdit">Batal</button>
+    </div>`;
+  document.getElementById('btnCancelEdit').onclick = () => { area.innerHTML = ''; };
+  document.getElementById('btnSaveEdit').onclick = async () => {
+    const body = {
+      nama_lengkap: document.getElementById('e_nama').value.trim(),
+      role_id: document.getElementById('e_role').value,
+      cabang_id: document.getElementById('e_cabang').value || null,
+      akses_semua_cabang: document.getElementById('e_allbranch').checked,
+      status: document.getElementById('e_status').value
+    };
+    const pass = document.getElementById('e_pass').value;
+    if (pass) body.password = pass;
+    try {
+      await api('/users/' + id, { method: 'PUT', body: JSON.stringify(body) });
+      area.innerHTML = '';
+      goPage('user', 'Pembuatan User');
+    } catch (e) { showMsg('editMsg', e.message, 'error'); }
   };
 };
 window.deleteUser = async function (id) {
