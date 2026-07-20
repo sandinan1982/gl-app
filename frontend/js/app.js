@@ -82,7 +82,8 @@ const MENU_STRUCTURE = [
   { group: 'Laporan', items: [
     { kode: 'LAP_NERACA', label: 'Laporan Neraca', page: 'neraca' },
     { kode: 'LAP_LABARUGI', label: 'Laporan Laba Rugi', page: 'labarugi' },
-    { kode: 'LAP_HARIAN', label: 'Laporan Transaksi Harian', page: 'harian' }
+    { kode: 'LAP_HARIAN', label: 'Laporan Transaksi Harian', page: 'harian' },
+    { kode: 'LAP_PREDIKSI', label: 'Prediksi Laba Rugi (AI)', page: 'prediksi' }
   ]},
   { group: 'Setting', items: [
     { kode: 'SET_USER', label: 'Pembuatan User', page: 'user' },
@@ -593,6 +594,55 @@ PAGES.harian = async function () {
       </tr>`).join('') || '<tr><td colspan="8" class="small-text center">Tidak ada transaksi.</td></tr>'}</tbody>
       <tfoot><tr class="total-row"><td colspan="5">TOTAL</td><td class="right">${fmtNum(data.totalDebit)}</td><td class="right">${fmtNum(data.totalKredit)}</td><td></td></tr></tfoot>
       </table>`;
+  };
+  document.getElementById('btnRun').click();
+};
+
+// ---------------------- LAPORAN: PREDIKSI LABA RUGI (AI) ----------------------
+PAGES.prediksi = async function () {
+  const content = document.getElementById('content');
+  content.innerHTML = `
+    <div class="card">
+      <div class="toolbar">
+        <div class="field"><label>Cabang</label><select id="f_cabang">${branchFilterOptions()}</select></div>
+        <div class="field"><label>Jumlah Bulan Riwayat</label>
+          <select id="f_bulan"><option value="3">3 Bulan</option><option value="6" selected>6 Bulan</option><option value="9">9 Bulan</option><option value="12">12 Bulan</option></select>
+        </div>
+        <button class="btn" id="btnRun">Buat Prediksi</button>
+      </div>
+      <p class="small-text">Prediksi dibuat otomatis dari analisis tren data Laba Rugi yang sudah terposting (regresi linear). Semakin banyak riwayat bulan yang tersedia, semakin akurat hasilnya. Hasil ini estimasi, bukan jaminan aktual di masa depan.</p>
+      <div id="reportArea"></div>
+    </div>`;
+  document.getElementById('btnRun').onclick = async () => {
+    const cabang_id = document.getElementById('f_cabang').value;
+    const bulan = document.getElementById('f_bulan').value;
+    const qs = new URLSearchParams({ bulan }); if (cabang_id) qs.set('cabang_id', cabang_id);
+    const data = await api('/reports/prediksi-laba-rugi?' + qs.toString());
+    const area = document.getElementById('reportArea');
+    if (data.message) { area.innerHTML = `<div class="msg error">${esc(data.message)}</div>`; return; }
+    const monthCols = data.historyMonths.map(m => `<th class="right">${esc(m)}</th>`).join('');
+    const rowHtml = (item) => `<tr><td class="mono">${esc(item.kode_account)}</td><td>${esc(item.nama_account)}</td>
+      ${item.history.map(v => `<td class="right">${fmtNum(v)}</td>`).join('')}
+      <td class="right" style="background:#eef6ff;font-weight:600;">${fmtNum(item.prediksi)}</td></tr>`;
+    area.innerHTML = `
+      <div class="msg success">Prediksi untuk periode <strong>${esc(data.nextPeriod)}</strong> — metode: ${esc(data.method)}</div>
+      <h4>Pendapatan</h4>
+      <table><thead><tr><th>Kode</th><th>Nama Account</th>${monthCols}<th class="right" style="background:#dbeafe;">Prediksi ${esc(data.nextPeriod)}</th></tr></thead>
+      <tbody>${data.pendapatan.map(rowHtml).join('') || '<tr><td colspan="' + (3 + data.historyMonths.length) + '" class="small-text">Tidak ada data</td></tr>'}
+      <tr class="total-row"><td colspan="2">TOTAL PENDAPATAN</td>
+        ${data.totalPendapatanHistory.map(v => `<td class="right">${fmtNum(v)}</td>`).join('')}
+        <td class="right" style="background:#dbeafe;">${fmtNum(data.totalPendapatanPrediksi)}</td></tr>
+      </tbody></table>
+      <h4 style="margin-top:20px;">Beban</h4>
+      <table><thead><tr><th>Kode</th><th>Nama Account</th>${monthCols}<th class="right" style="background:#dbeafe;">Prediksi ${esc(data.nextPeriod)}</th></tr></thead>
+      <tbody>${data.beban.map(rowHtml).join('') || '<tr><td colspan="' + (3 + data.historyMonths.length) + '" class="small-text">Tidak ada data</td></tr>'}
+      <tr class="total-row"><td colspan="2">TOTAL BEBAN</td>
+        ${data.totalBebanHistory.map(v => `<td class="right">${fmtNum(v)}</td>`).join('')}
+        <td class="right" style="background:#dbeafe;">${fmtNum(data.totalBebanPrediksi)}</td></tr>
+      </tbody></table>
+      <div class="msg ${data.labaRugiPrediksi >= 0 ? 'success' : 'error'}" style="margin-top:16px;font-size:15px;">
+        Prediksi Laba/Rugi Bersih ${esc(data.nextPeriod)}: <strong>${fmtNum(data.labaRugiPrediksi)}</strong>
+      </div>`;
   };
   document.getElementById('btnRun').click();
 };

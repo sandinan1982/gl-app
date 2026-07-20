@@ -4,6 +4,24 @@ const { authRequired, requirePermission, scopeBranch } = require('../middleware/
 const router = express.Router();
 router.use(authRequired);
 
+// Prediksi sederhana berbasis tren (regresi linear) dari deret waktu bulanan.
+// Bukan machine learning kompleks, tapi metode statistik standar untuk forecasting tren.
+function linearRegressionPredict(values) {
+  const n = values.length;
+  if (n === 0) return 0;
+  if (n === 1) return Math.max(0, values[0]);
+  const xs = values.map((_, i) => i);
+  const sumX = xs.reduce((a, b) => a + b, 0);
+  const sumY = values.reduce((a, b) => a + b, 0);
+  const sumXY = xs.reduce((s, x, i) => s + x * values[i], 0);
+  const sumXX = xs.reduce((s, x) => s + x * x, 0);
+  const denom = (n * sumXX - sumX * sumX);
+  if (denom === 0) return Math.max(0, sumY / n);
+  const slope = (n * sumXY - sumX * sumY) / denom;
+  const intercept = (sumY - slope * sumX) / n;
+  return Math.max(0, intercept + slope * n);
+}
+
 // ============ LAPORAN NERACA (Balance Sheet) - saldo s/d tanggal tertentu ============
 router.get('/neraca', requirePermission('LAP_NERACA', 'view'), scopeBranch, (req, res) => {
   const { sampai, cabang_id } = req.query;
@@ -111,6 +129,74 @@ router.get('/harian', requirePermission('LAP_HARIAN', 'view'), scopeBranch, (req
   const totalDebit = rows.reduce((s, r) => s + r.debit, 0);
   const totalKredit = rows.reduce((s, r) => s + r.kredit, 0);
   res.json({ tanggal, rows, totalDebit, totalKredit });
+});
+
+// ============ PREDIKSI LABA RUGI (AI - trend forecasting) ============
+router.get('/prediksi-laba-rugi', requirePermission('LAP_PREDIKSI', 'view'), scopeBranch, (req, res) => {
+  const branch = req.branchFilter || req.query.cabang_id || null;
+  let bulan = parseInt(req.query.bulan, 10);
+  if (!bulan || bulan < 2) bulan = 6;
+  if (bulan > 24) bulan = 24;
+
+  let sql = `SELECT coa.kode_account, coa.nama_account, coa.kategori, substr(jv.tanggal,1,7) periode,
+      SUM(jd.debit) tdebit, SUM(jd.kredit) tkredit
+    FROM chart_of_accounts coa
+    JOIN journal_detail jd ON jd.kode_account = coa.kode_account
+    JOIN journal_voucher jv ON jv.no_bukti = jd.no_bukti AND jv.status='POSTED'
+    WHERE coa.kategori IN ('PENDAPATAN','BEBAN') AND coa.is_header=0`;
+  const params = [];
+  if (branch) { sql += ' AND jv.cabang_id=?'; params.push(branch); }
+  sql += ` GROUP BY coa.kode_account, periode ORDER BY coa.kode_account, periode`;
+
+  const rows = db.prepare(sql).all(...params);
+  if (rows.length === 0) {
+    return res.json({
+      historyMonths: [], nextPeriod: null, pendapatan: [], beban: [],
+      totalPendapatanHistory: [], totalBebanHistory: [],
+      totalPendapatanPrediksi: 0, totalBebanPrediksi: 0, labaRugiPrediksi: 0,
+      message: 'Belum ada data transaksi terposting yang cukup untuk membuat prediksi.'
+    });
+  }
+
+  const allPeriods = Array.from(new Set(rows.map(r => r.periode))).sort();
+  const historyMonths = allPeriods.slice(-bulan);
+
+  const accMap = {};
+  rows.forEach(r => {
+    if (!accMap[r.kode_account]) accMap[r.kode_account] = { kode_account: r.kode_account, nama_account: r.nama_account, kategori: r.kategori, monthly: {} };
+    const val = r.kategori === 'PENDAPATAN' ? (r.tkredit - r.tdebit) : (r.tdebit - r.tkredit);
+    accMap[r.kode_account].monthly[r.periode] = val;
+  });
+
+  const buildSeries = (monthly) => historyMonths.map(p => Number(monthly[p] || 0));
+
+  const pendapatan = [], beban = [];
+  const totalPendapatanHistory = historyMonths.map(() => 0);
+  const totalBebanHistory = historyMonths.map(() => 0);
+
+  Object.values(accMap).forEach(acc => {
+    const series = buildSeries(acc.monthly);
+    const prediksi = linearRegressionPredict(series);
+    const item = { kode_account: acc.kode_account, nama_account: acc.nama_account, history: series, prediksi };
+    if (acc.kategori === 'PENDAPATAN') { pendapatan.push(item); series.forEach((v, i) => totalPendapatanHistory[i] += v); }
+    else { beban.push(item); series.forEach((v, i) => totalBebanHistory[i] += v); }
+  });
+
+  const totalPendapatanPrediksi = linearRegressionPredict(totalPendapatanHistory);
+  const totalBebanPrediksi = linearRegressionPredict(totalBebanHistory);
+  const labaRugiPrediksi = totalPendapatanPrediksi - totalBebanPrediksi;
+
+  const lastPeriod = allPeriods[allPeriods.length - 1];
+  const [y, m] = lastPeriod.split('-').map(Number);
+  const nd = new Date(y, m, 1); // m 1-indexed -> otomatis maju satu bulan
+  const nextPeriod = `${nd.getFullYear()}-${String(nd.getMonth() + 1).padStart(2, '0')}`;
+
+  res.json({
+    historyMonths, nextPeriod, pendapatan, beban,
+    totalPendapatanHistory, totalBebanHistory,
+    totalPendapatanPrediksi, totalBebanPrediksi, labaRugiPrediksi,
+    method: historyMonths.length >= 3 ? 'Tren regresi linear' : 'Rata-rata sederhana (riwayat data < 3 bulan, prediksi kurang akurat)'
+  });
 });
 
 module.exports = router;

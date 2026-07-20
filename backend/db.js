@@ -27,6 +27,7 @@ function seed() {
     ['LAP_NERACA', 'Laporan Neraca', 'Laporan'],
     ['LAP_LABARUGI', 'Laporan Laba Rugi', 'Laporan'],
     ['LAP_HARIAN', 'Laporan Transaksi Harian', 'Laporan'],
+    ['LAP_PREDIKSI', 'Prediksi Laba Rugi (AI)', 'Laporan'],
     ['SET_USER', 'Pembuatan User', 'Setting'],
     ['SET_HAKAKSES', 'Hak Akses User', 'Setting']
   ];
