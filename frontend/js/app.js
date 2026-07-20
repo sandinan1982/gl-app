@@ -341,12 +341,20 @@ function renderDetailRows(readOnly) {
     <td><select onchange="jurnalRows[${i}].kode_department=this.value" ${readOnly ? 'disabled' : ''}>${deptOptions(cabangId, r.kode_department)}</select></td>
     <td><input type="number" step="0.01" value="${r.debit || 0}" style="width:110px" onchange="handleAmountChange(${i}, 'debit', parseFloat(this.value)||0)" ${readOnly ? 'disabled' : ''}></td>
     <td><input type="number" step="0.01" value="${r.kredit || 0}" style="width:110px" onchange="handleAmountChange(${i}, 'kredit', parseFloat(this.value)||0)" ${readOnly ? 'disabled' : ''}></td>
-    <td><input value="${esc(r.keterangan)}" onchange="jurnalRows[${i}].keterangan=this.value" ${readOnly ? 'disabled' : ''}></td>
+    <td><input value="${esc(r.keterangan)}" onchange="handleKetChange(${i}, this.value)" ${readOnly ? 'disabled' : ''}></td>
     <td>${!readOnly ? `<button class="btn danger small" onclick="removeJurnalRow(${i})">x</button>` : ''}</td>
   </tr>`).join('');
   updateTotals();
 }
-window.removeJurnalRow = function (i) { jurnalRows.splice(i, 1); renderDetailRows(false); };
+window.removeJurnalRow = function (i) {
+  jurnalRows.splice(i, 1);
+  // Perbaiki referensi pasangan (pairWith) karena index baris bergeser setelah penghapusan
+  jurnalRows.forEach(r => {
+    if (r.pairWith === i) r.pairWith = null;
+    else if (r.pairWith !== undefined && r.pairWith !== null && r.pairWith > i) r.pairWith -= 1;
+  });
+  renderDetailRows(false);
+};
 window.updateTotals = function () {
   const td = jurnalRows.reduce((s, r) => s + (Number(r.debit) || 0), 0);
   const tk = jurnalRows.reduce((s, r) => s + (Number(r.kredit) || 0), 0);
@@ -355,23 +363,36 @@ window.updateTotals = function () {
 };
 window.jurnalRows = jurnalRows;
 
-// Ketika salah satu sisi (debit/kredit) diisi, otomatis isikan sisi lawan pada baris kosong lain
-// supaya jurnal cepat balance tanpa mengetik dua kali.
+// Sinkronkan nominal (sisi lawan) & keterangan antara dua baris yang berpasangan (debit <-> kredit)
+function syncPairedRow(i) {
+  const row = jurnalRows[i];
+  if (row.pairWith === undefined || row.pairWith === null) return;
+  const target = jurnalRows[row.pairWith];
+  if (!target) return;
+  if (row.debit > 0) target.kredit = row.debit;
+  if (row.kredit > 0) target.debit = row.kredit;
+  target.keterangan = row.keterangan;
+}
+
+// Ketika salah satu sisi (debit/kredit) diisi, otomatis pasangkan dengan baris kosong lain
+// supaya jurnal cepat balance tanpa mengetik dua kali, dan keterangan ikut tersinkron.
 window.handleAmountChange = function (i, field, value) {
   jurnalRows[i][field] = value;
-  if (value > 0) {
-    const opposite = field === 'debit' ? 'kredit' : 'debit';
-    let target = -1;
-    for (let j = i + 1; j < jurnalRows.length; j++) {
-      if (!jurnalRows[j].debit && !jurnalRows[j].kredit) { target = j; break; }
+  if (jurnalRows[i].pairWith === undefined || jurnalRows[i].pairWith === null) {
+    if (value > 0) {
+      const isFree = j => !jurnalRows[j].debit && !jurnalRows[j].kredit && (jurnalRows[j].pairWith === undefined || jurnalRows[j].pairWith === null);
+      let target = -1;
+      for (let j = i + 1; j < jurnalRows.length; j++) { if (isFree(j)) { target = j; break; } }
+      if (target === -1) { for (let j = 0; j < jurnalRows.length; j++) { if (j !== i && isFree(j)) { target = j; break; } } }
+      if (target !== -1) { jurnalRows[i].pairWith = target; jurnalRows[target].pairWith = i; }
     }
-    if (target === -1) {
-      for (let j = 0; j < jurnalRows.length; j++) {
-        if (j !== i && !jurnalRows[j].debit && !jurnalRows[j].kredit) { target = j; break; }
-      }
-    }
-    if (target !== -1) jurnalRows[target][opposite] = value;
   }
+  syncPairedRow(i);
+  renderDetailRows(false);
+};
+window.handleKetChange = function (i, value) {
+  jurnalRows[i].keterangan = value;
+  syncPairedRow(i);
   renderDetailRows(false);
 };
 
