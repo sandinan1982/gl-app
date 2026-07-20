@@ -10,6 +10,7 @@ const state = {
   branches: [],
   coa: [],
   departments: [],
+  activeCabang: localStorage.getItem('gl_active_cabang') || null,
   currentPage: null
 };
 
@@ -125,6 +126,16 @@ async function bootApp() {
   try { state.branches = await api('/branches'); } catch (e) { state.branches = []; }
   try { state.coa = await api('/coa'); } catch (e) { state.coa = []; }
   try { state.departments = await api('/departments'); } catch (e) { state.departments = []; }
+
+  // Tentukan cabang aktif: user tanpa akses semua cabang selalu terkunci ke cabangnya sendiri.
+  if (!state.user.akses_semua_cabang) {
+    state.activeCabang = state.user.cabang_id ? String(state.user.cabang_id) : null;
+  } else if (!state.activeCabang || !state.branches.find(b => String(b.id) === String(state.activeCabang))) {
+    state.activeCabang = state.branches.length ? String(state.branches[0].id) : null;
+  }
+  localStorage.setItem('gl_active_cabang', state.activeCabang || '');
+  renderBranchSwitcher();
+
   const first = MENU_STRUCTURE.flatMap(g => g.items).find(i => hasPerm(i.kode, 'view'));
   if (first) goPage(first.page, first.label);
   else document.getElementById('content').innerHTML = '<div class="msg error">Anda tidak memiliki akses menu apapun.</div>';
@@ -132,6 +143,27 @@ async function bootApp() {
 
 function branchOptions(selected) {
   return state.branches.map(b => `<option value="${b.id}" ${String(b.id) === String(selected) ? 'selected' : ''}>${esc(b.kode_cabang)} - ${esc(b.nama_cabang)}</option>`).join('');
+}
+function branchFilterOptions() {
+  return `<option value="">Semua Cabang</option>${branchOptions(state.activeCabang)}`;
+}
+function renderBranchSwitcher() {
+  const wrap = document.getElementById('branchSwitcherWrap');
+  if (!wrap) return;
+  if (state.user.akses_semua_cabang) {
+    wrap.innerHTML = `<label>Cabang Aktif</label><select id="branchSwitcher">${branchOptions(state.activeCabang)}</select>`;
+    document.getElementById('branchSwitcher').onchange = (e) => {
+      state.activeCabang = e.target.value;
+      localStorage.setItem('gl_active_cabang', state.activeCabang);
+      if (state.currentPage) {
+        const item = MENU_STRUCTURE.flatMap(g => g.items).find(i => i.page === state.currentPage);
+        goPage(state.currentPage, item ? item.label : '');
+      }
+    };
+  } else {
+    const b = state.branches.find(x => String(x.id) === String(state.activeCabang));
+    wrap.innerHTML = `<label>Cabang</label><div class="fixed-branch">${b ? esc(b.kode_cabang) + ' - ' + esc(b.nama_cabang) : '-'}</div>`;
+  }
 }
 function coaOptions(selected) {
   return state.coa.filter(c => c.status === 'AKTIF').map(c => `<option value="${c.kode_account}" ${c.kode_account === selected ? 'selected' : ''}>${esc(c.kode_account)} - ${esc(c.nama_account)}</option>`).join('');
@@ -232,7 +264,7 @@ PAGES.dept = async function () {
       ${canAdd ? `<div class="toolbar">
         <div class="field"><label>Kode Dept</label><input id="f_kode" maxlength="10"></div>
         <div class="field"><label>Nama Department</label><input id="f_nama"></div>
-        <div class="field"><label>Cabang</label><select id="f_cabang">${branchOptions()}</select></div>
+        <div class="field"><label>Cabang</label><select id="f_cabang">${branchOptions(state.activeCabang)}</select></div>
         <button class="btn" id="btnAdd">+ Tambah Department</button>
       </div>` : ''}
       <div id="msgBox"></div>
@@ -261,7 +293,8 @@ window.deleteDept = async function (id) {
 // ---------------------- TRANSAKSI: JURNAL ----------------------
 let jurnalRows = [];
 PAGES.jurnal = async function () {
-  const list = await api('/journal');
+  const qs = state.activeCabang ? '?cabang_id=' + state.activeCabang : '';
+  const list = await api('/journal' + qs);
   const canAdd = hasPerm('TRX_JURNAL', 'add');
   document.getElementById('content').innerHTML = `
     <div class="card">
@@ -295,7 +328,7 @@ function renderJurnalForm(existing) {
       <div class="form-grid">
         <div><label>No Bukti (kosongkan untuk otomatis)</label><input id="j_nobukti" value="${h ? esc(h.no_bukti) : ''}" ${h ? 'disabled' : ''}></div>
         <div><label>Tanggal</label><input type="date" id="j_tanggal" value="${h ? h.tanggal : todayStr()}" ${readOnly ? 'disabled' : ''}></div>
-        <div><label>Cabang</label><select id="j_cabang" ${h ? 'disabled' : ''}>${branchOptions(h ? h.cabang_id : null)}</select></div>
+        <div><label>Cabang</label><select id="j_cabang" ${h ? 'disabled' : ''}>${branchOptions(h ? h.cabang_id : state.activeCabang)}</select></div>
         <div><label>Keterangan</label><input id="j_ket" value="${h ? esc(h.keterangan || '') : ''}" ${readOnly ? 'disabled' : ''}></div>
       </div>
       <table id="jurnalDetailTable"><thead><tr><th>Kode Account</th><th>Department</th><th class="right">Debit</th><th class="right">Kredit</th><th>Keterangan</th><th></th></tr></thead>
@@ -406,8 +439,8 @@ window.viewJurnal = async function (no_bukti) {
 
 // ---------------------- TRANSAKSI: POSTING ----------------------
 PAGES.posting = async function () {
-  const list = await api('/journal', { }); // list all, filter draft client side via query
-  const drafts = (await api('/journal?status=DRAFT'));
+  const qs = state.activeCabang ? '&cabang_id=' + state.activeCabang : '';
+  const drafts = (await api('/journal?status=DRAFT' + qs));
   const canPost = hasPerm('TRX_POSTING', 'post');
   document.getElementById('content').innerHTML = `
     <div class="card">
@@ -434,7 +467,7 @@ PAGES.tutupbuku = async function () {
   document.getElementById('content').innerHTML = `
     <div class="card">
       ${canPost ? `<div class="toolbar">
-        <div class="field"><label>Cabang</label><select id="f_cabang">${branchOptions()}</select></div>
+        <div class="field"><label>Cabang</label><select id="f_cabang">${branchOptions(state.activeCabang)}</select></div>
         <div class="field"><label>Periode (Tahun-Bulan)</label><input type="month" id="f_periode" value="${todayStr().slice(0,7)}"></div>
         <button class="btn" id="btnTutup">Tutup Buku</button>
       </div>` : ''}
@@ -481,7 +514,7 @@ PAGES.neraca = async function () {
   content.innerHTML = `
     <div class="card">
       <div class="toolbar">
-        <div class="field"><label>Cabang</label><select id="f_cabang"><option value="">Semua Cabang</option>${branchOptions()}</select></div>
+        <div class="field"><label>Cabang</label><select id="f_cabang">${branchFilterOptions()}</select></div>
         <div class="field"><label>Per Tanggal</label><input type="date" id="f_tanggal" value="${todayStr()}"></div>
         <button class="btn" id="btnRun">Tampilkan</button>
       </div>
@@ -511,7 +544,7 @@ PAGES.labarugi = async function () {
   content.innerHTML = `
     <div class="card">
       <div class="toolbar">
-        <div class="field"><label>Cabang</label><select id="f_cabang"><option value="">Semua Cabang</option>${branchOptions()}</select></div>
+        <div class="field"><label>Cabang</label><select id="f_cabang">${branchFilterOptions()}</select></div>
         <div class="field"><label>Dari Tanggal</label><input type="date" id="f_dari" value="${firstDay}"></div>
         <div class="field"><label>Sampai Tanggal</label><input type="date" id="f_sampai" value="${todayStr()}"></div>
         <button class="btn" id="btnRun">Tampilkan</button>
@@ -539,7 +572,7 @@ PAGES.harian = async function () {
   content.innerHTML = `
     <div class="card">
       <div class="toolbar">
-        <div class="field"><label>Cabang</label><select id="f_cabang"><option value="">Semua Cabang</option>${branchOptions()}</select></div>
+        <div class="field"><label>Cabang</label><select id="f_cabang">${branchFilterOptions()}</select></div>
         <div class="field"><label>Tanggal</label><input type="date" id="f_tanggal" value="${todayStr()}"></div>
         <div class="field"><label>Status</label><select id="f_status"><option value="">Semua</option><option value="DRAFT">DRAFT</option><option value="POSTED">POSTED</option></select></div>
         <button class="btn" id="btnRun">Tampilkan</button>
