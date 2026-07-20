@@ -324,7 +324,7 @@ function renderJurnalForm(existing) {
       details: jurnalRows.filter(r => r.kode_account)
     };
     try {
-      if (h) { await api('/journal/' + h.no_bukti, { method: 'PUT', body: JSON.stringify(body) }); }
+      if (h) { await api('/journal/' + encodeURIComponent(h.no_bukti), { method: 'PUT', body: JSON.stringify(body) }); }
       else { await api('/journal', { method: 'POST', body: JSON.stringify(body) }); }
       area.innerHTML = '';
       goPage('jurnal', 'Jurnal Transaksi');
@@ -376,9 +376,11 @@ window.handleAmountChange = function (i, field, value) {
 };
 
 window.viewJurnal = async function (no_bukti) {
-  const data = await api('/journal/' + no_bukti);
-  document.getElementById('formArea') ? null : (document.getElementById('content').querySelector('.card').insertAdjacentHTML('afterbegin', '<div id="formArea"></div>'));
-  renderJurnalForm(data);
+  try {
+    const data = await api('/journal/' + encodeURIComponent(no_bukti));
+    document.getElementById('formArea') ? null : (document.getElementById('content').querySelector('.card').insertAdjacentHTML('afterbegin', '<div id="formArea"></div>'));
+    renderJurnalForm(data);
+  } catch (e) { alert(e.message); }
 };
 
 // ---------------------- TRANSAKSI: POSTING ----------------------
@@ -400,7 +402,7 @@ PAGES.posting = async function () {
 };
 window.postJurnal = async function (no_bukti) {
   if (!confirm(`Posting jurnal ${no_bukti}? Setelah diposting, jurnal tidak dapat diubah.`)) return;
-  try { await api(`/journal/${no_bukti}/post`, { method: 'POST' }); goPage('posting', 'Posting Transaksi'); }
+  try { await api(`/journal/${encodeURIComponent(no_bukti)}/post`, { method: 'POST' }); goPage('posting', 'Posting Transaksi'); }
   catch (e) { alert(e.message); }
 };
 
