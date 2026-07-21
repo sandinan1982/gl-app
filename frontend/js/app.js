@@ -415,12 +415,14 @@ PAGES.jurnal = async function () {
   if (canAdd) document.getElementById('btnNew').onclick = () => renderJurnalForm();
 };
 
+let currentJournalHeader = null;
 function renderJurnalForm(existing) {
-  jurnalRows = existing ? existing.details.map(d => ({ kode_account: d.kode_account, kode_department: d.kode_department || '', debit: d.debit, kredit: d.kredit, keterangan: d.keterangan || '' })) : [
-    { kode_account: '', kode_department: '', debit: 0, kredit: 0, keterangan: '' },
-    { kode_account: '', kode_department: '', debit: 0, kredit: 0, keterangan: '' }
+  jurnalRows = existing ? existing.details.map(d => ({ kode_account: d.kode_account, kode_department: d.kode_department || '', debit: d.debit, kredit: d.kredit, keterangan: d.keterangan || '', selected: false })) : [
+    { kode_account: '', kode_department: '', debit: 0, kredit: 0, keterangan: '', selected: false },
+    { kode_account: '', kode_department: '', debit: 0, kredit: 0, keterangan: '', selected: false }
   ];
   const h = existing ? existing.header : null;
+  currentJournalHeader = h;
   const readOnly = h && h.status === 'POSTED';
   const area = document.getElementById('formArea');
   area.innerHTML = `
@@ -432,40 +434,59 @@ function renderJurnalForm(existing) {
         <div><label>Cabang</label><select id="j_cabang" ${h ? 'disabled' : ''}>${branchOptions(h ? h.cabang_id : state.activeCabang)}</select></div>
         <div><label>Keterangan</label><input id="j_ket" value="${h ? esc(h.keterangan || '') : ''}" ${readOnly ? 'disabled' : ''}></div>
       </div>
-      <table id="jurnalDetailTable"><thead><tr><th>Kode Account</th><th>Department</th><th class="right">Debit</th><th class="right">Kredit</th><th>Keterangan</th><th></th></tr></thead>
+      <table id="jurnalDetailTable"><thead><tr>
+        <th style="width:30px;">${!readOnly ? '<input type="checkbox" id="chkAll" onchange="toggleAllRows(this.checked)">' : ''}</th>
+        <th>Kode Account</th><th>Department</th><th class="right">Debit</th><th class="right">Kredit</th><th>Keterangan</th><th></th>
+      </tr></thead>
       <tbody id="jurnalDetailBody"></tbody>
-      <tfoot><tr class="total-row"><td colspan="2">TOTAL</td><td class="right" id="totDebit">0</td><td class="right" id="totKredit">0</td><td colspan="2"></td></tr></tfoot>
+      <tfoot><tr class="total-row"><td></td><td colspan="2">TOTAL</td><td class="right" id="totDebit">0</td><td class="right" id="totKredit">0</td><td colspan="2"></td></tr></tfoot>
       </table>
-      <div style="margin-top:10px;">
+      <div style="margin-top:10px;display:flex;gap:8px;">
         ${!readOnly ? `<button class="btn secondary small" id="btnAddRow">+ Tambah Baris</button>` : ''}
+        ${!readOnly ? `<button class="btn danger small" id="btnDeleteSelected">Hapus Baris Terpilih</button>` : ''}
       </div>
       <div id="formMsg"></div>
-      <div style="margin-top:14px;">
-        ${!readOnly ? `<button class="btn" id="btnSave">Simpan Draft</button>` : ''}
-        ${readOnly && hasPerm('TRX_BATALPOSTING', 'post') ? `<button class="btn danger" id="btnUnpost">Batal Posting</button>` : ''}
-        <button class="btn secondary" id="btnCancel">Tutup</button>
-      </div>
+      <div id="actionButtonsArea" style="margin-top:14px;display:inline-block;"></div>
+      <button class="btn secondary" id="btnCancel" style="margin-top:14px;">Tutup</button>
     </div>`;
   renderDetailRows(readOnly);
-  if (!readOnly) document.getElementById('btnAddRow').onclick = () => { jurnalRows.push({ kode_account: '', kode_department: '', debit: 0, kredit: 0, keterangan: '' }); renderDetailRows(readOnly); };
+  if (!readOnly) document.getElementById('btnAddRow').onclick = () => { jurnalRows.push({ kode_account: '', kode_department: '', debit: 0, kredit: 0, keterangan: '', selected: false }); renderDetailRows(readOnly); };
+  if (!readOnly) document.getElementById('btnDeleteSelected').onclick = () => deleteSelectedRows();
   if (!readOnly) document.getElementById('j_cabang').onchange = () => renderDetailRows(readOnly);
   document.getElementById('btnCancel').onclick = () => { area.innerHTML = ''; };
-  if (readOnly && document.getElementById('btnUnpost')) document.getElementById('btnUnpost').onclick = () => unpostJurnal(h.no_bukti);
-  if (!readOnly) document.getElementById('btnSave').onclick = async () => {
-    const body = {
-      no_bukti: h ? h.no_bukti : document.getElementById('j_nobukti').value.trim(),
-      tanggal: document.getElementById('j_tanggal').value,
-      cabang_id: document.getElementById('j_cabang').value,
-      keterangan: document.getElementById('j_ket').value,
-      details: jurnalRows.filter(r => r.kode_account)
+}
+
+function updateActionButtons(h, readOnly) {
+  const area = document.getElementById('actionButtonsArea');
+  if (!area) return;
+  if (readOnly) {
+    area.innerHTML = hasPerm('TRX_BATALPOSTING', 'post') ? `<button class="btn danger" id="btnUnpost">Batal Posting</button>` : '';
+    if (document.getElementById('btnUnpost')) document.getElementById('btnUnpost').onclick = () => unpostJurnal(h.no_bukti);
+    return;
+  }
+  if (jurnalRows.length === 0 && h) {
+    // Semua baris sudah dihapus dari No Bukti yang sudah tersimpan (masih DRAFT) - tawarkan hapus No Bukti sepenuhnya
+    area.innerHTML = `<div class="msg error" style="margin-bottom:10px;">Semua baris jurnal sudah dihapus. Jurnal tidak bisa disimpan tanpa baris (minimal 2). Anda bisa menghapus No Bukti ini sepenuhnya.</div>
+      ${hasPerm('TRX_JURNAL', 'delete') ? `<button class="btn danger" id="btnDeleteVoucher">Hapus No Bukti Ini</button>` : '<p class="small-text">Anda tidak memiliki hak akses untuk menghapus No Bukti.</p>'}`;
+    if (document.getElementById('btnDeleteVoucher')) document.getElementById('btnDeleteVoucher').onclick = () => deleteVoucher(h.no_bukti);
+  } else {
+    area.innerHTML = `<button class="btn" id="btnSave">Simpan Draft</button>`;
+    document.getElementById('btnSave').onclick = async () => {
+      const body = {
+        no_bukti: h ? h.no_bukti : document.getElementById('j_nobukti').value.trim(),
+        tanggal: document.getElementById('j_tanggal').value,
+        cabang_id: document.getElementById('j_cabang').value,
+        keterangan: document.getElementById('j_ket').value,
+        details: jurnalRows.filter(r => r.kode_account)
+      };
+      try {
+        if (h) { await api('/journal/' + encodeURIComponent(h.no_bukti), { method: 'PUT', body: JSON.stringify(body) }); }
+        else { await api('/journal', { method: 'POST', body: JSON.stringify(body) }); }
+        document.getElementById('formArea').innerHTML = '';
+        goPage('jurnal', 'Jurnal Transaksi');
+      } catch (e) { showMsg('formMsg', e.message, 'error'); }
     };
-    try {
-      if (h) { await api('/journal/' + encodeURIComponent(h.no_bukti), { method: 'PUT', body: JSON.stringify(body) }); }
-      else { await api('/journal', { method: 'POST', body: JSON.stringify(body) }); }
-      area.innerHTML = '';
-      goPage('jurnal', 'Jurnal Transaksi');
-    } catch (e) { showMsg('formMsg', e.message, 'error'); }
-  };
+  }
 }
 
 function renderDetailRows(readOnly) {
@@ -473,6 +494,7 @@ function renderDetailRows(readOnly) {
   const cabangSel = document.getElementById('j_cabang');
   const cabangId = cabangSel ? cabangSel.value : null;
   body.innerHTML = jurnalRows.map((r, i) => `<tr>
+    <td>${!readOnly ? `<input type="checkbox" ${r.selected ? 'checked' : ''} onchange="jurnalRows[${i}].selected=this.checked">` : ''}</td>
     <td><select onchange="jurnalRows[${i}].kode_account=this.value" ${readOnly ? 'disabled' : ''}><option value="">-- pilih --</option>${coaOptions(r.kode_account)}</select></td>
     <td><select onchange="jurnalRows[${i}].kode_department=this.value" ${readOnly ? 'disabled' : ''}>${deptOptions(cabangId, r.kode_department)}</select></td>
     <td><input type="number" step="0.01" value="${r.debit || 0}" style="width:110px" onchange="handleAmountChange(${i}, 'debit', parseFloat(this.value)||0)" ${readOnly ? 'disabled' : ''}></td>
@@ -481,7 +503,25 @@ function renderDetailRows(readOnly) {
     <td>${!readOnly ? `<button class="btn danger small" onclick="removeJurnalRow(${i})">x</button>` : ''}</td>
   </tr>`).join('');
   updateTotals();
+  updateActionButtons(currentJournalHeader, readOnly);
 }
+window.toggleAllRows = function (checked) {
+  jurnalRows.forEach(r => r.selected = checked);
+  renderDetailRows(false);
+};
+window.deleteSelectedRows = function () {
+  const toRemove = jurnalRows.map((r, i) => r.selected ? i : -1).filter(i => i !== -1);
+  if (toRemove.length === 0) { alert('Pilih baris yang ingin dihapus terlebih dahulu (centang baris atau centang "pilih semua").'); return; }
+  if (!confirm(`Hapus ${toRemove.length} baris terpilih?`)) return;
+  toRemove.sort((a, b) => b - a).forEach(idx => {
+    jurnalRows.splice(idx, 1);
+    jurnalRows.forEach(r => {
+      if (r.pairWith === idx) r.pairWith = null;
+      else if (r.pairWith !== undefined && r.pairWith !== null && r.pairWith > idx) r.pairWith -= 1;
+    });
+  });
+  renderDetailRows(false);
+};
 window.removeJurnalRow = function (i) {
   jurnalRows.splice(i, 1);
   // Perbaiki referensi pasangan (pairWith) karena index baris bergeser setelah penghapusan
@@ -490,6 +530,14 @@ window.removeJurnalRow = function (i) {
     else if (r.pairWith !== undefined && r.pairWith !== null && r.pairWith > i) r.pairWith -= 1;
   });
   renderDetailRows(false);
+};
+window.deleteVoucher = async function (no_bukti) {
+  if (!confirm(`Hapus No Bukti ${no_bukti} beserta seluruh datanya? Tindakan ini tidak bisa dibatalkan.`)) return;
+  try {
+    await api('/journal/' + encodeURIComponent(no_bukti), { method: 'DELETE' });
+    document.getElementById('formArea').innerHTML = '';
+    goPage('jurnal', 'Jurnal Transaksi');
+  } catch (e) { alert(e.message); }
 };
 window.updateTotals = function () {
   const td = jurnalRows.reduce((s, r) => s + (Number(r.debit) || 0), 0);
@@ -539,6 +587,7 @@ window.viewJurnal = async function (no_bukti) {
     renderJurnalForm(data);
   } catch (e) { alert(e.message); }
 };
+
 
 // ---------------------- TRANSAKSI: POSTING ----------------------
 PAGES.posting = async function () {
