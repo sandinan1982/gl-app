@@ -99,6 +99,10 @@ const MENU_STRUCTURE = [
 function renderMenu() {
   const nav = document.getElementById('menuNav');
   nav.innerHTML = '';
+  const dashLink = document.createElement('a');
+  dashLink.className = 'menu-item'; dashLink.textContent = 'Dashboard'; dashLink.dataset.page = 'dashboard';
+  dashLink.onclick = () => goPage('dashboard', 'Dashboard');
+  nav.appendChild(dashLink);
   MENU_STRUCTURE.forEach(g => {
     const visibleItems = g.items.filter(i => hasPerm(i.kode, 'view'));
     if (visibleItems.length === 0) return;
@@ -144,9 +148,7 @@ async function bootApp() {
   localStorage.setItem('gl_active_cabang', state.activeCabang || '');
   renderBranchSwitcher();
 
-  const first = MENU_STRUCTURE.flatMap(g => g.items).find(i => hasPerm(i.kode, 'view'));
-  if (first) goPage(first.page, first.label);
-  else document.getElementById('content').innerHTML = '<div class="msg error">Anda tidak memiliki akses menu apapun.</div>';
+  goPage('dashboard', 'Dashboard');
 }
 
 function branchOptions(selected) {
@@ -165,7 +167,7 @@ function renderBranchSwitcher() {
       localStorage.setItem('gl_active_cabang', state.activeCabang);
       if (state.currentPage) {
         const item = MENU_STRUCTURE.flatMap(g => g.items).find(i => i.page === state.currentPage);
-        goPage(state.currentPage, item ? item.label : '');
+        goPage(state.currentPage, item ? item.label : (state.currentPage === 'dashboard' ? 'Dashboard' : ''));
       }
     };
   } else {
@@ -197,6 +199,149 @@ function subDeptOptions(selected) {
 // PAGES
 // ======================================================================
 const PAGES = {};
+
+// ---------------------- DASHBOARD ----------------------
+PAGES.dashboard = async function () {
+  const content = document.getElementById('content');
+  const qs = state.activeCabang ? '?cabang_id=' + state.activeCabang : '';
+  let data;
+  try { data = await api('/reports/dashboard' + qs); }
+  catch (e) { content.innerHTML = `<div class="msg error">${esc(e.message)}</div>`; return; }
+
+  const labaBulanIni = data.labaRugiBulanIni.laba;
+  const tutupBukuCard = data.tutupBuku.mode === 'single'
+    ? `<div class="dash-card ${data.tutupBuku.status === 'CLOSED' ? 'danger' : 'success'}">
+        <div class="label">Status Periode ${esc(data.periode)}</div>
+        <div class="value">${data.tutupBuku.status === 'CLOSED' ? 'Tutup Buku' : 'Terbuka'}</div>
+        <div class="sub">${data.tutupBuku.status === 'CLOSED' ? 'Tidak bisa input transaksi baru' : 'Transaksi masih bisa diinput'}</div>
+      </div>`
+    : `<div class="dash-card">
+        <div class="label">Status Tutup Buku ${esc(data.periode)}</div>
+        <div class="value">${data.tutupBuku.closedCount} / ${data.tutupBuku.totalCabang}</div>
+        <div class="sub">cabang sudah tutup buku</div>
+      </div>`;
+
+  content.innerHTML = `
+    <div class="dash-grid">
+      <div class="dash-card">
+        <div class="label">Total Aset (per hari ini)</div>
+        <div class="value">${fmtNum(data.neraca.totalAset)}</div>
+      </div>
+      <div class="dash-card">
+        <div class="label">Total Kewajiban</div>
+        <div class="value">${fmtNum(data.neraca.totalKewajiban)}</div>
+      </div>
+      <div class="dash-card">
+        <div class="label">Total Modal</div>
+        <div class="value">${fmtNum(data.neraca.totalModal)}</div>
+      </div>
+      <div class="dash-card ${labaBulanIni >= 0 ? 'success' : 'danger'}">
+        <div class="label">Laba/Rugi Bulan ${esc(data.periode)}</div>
+        <div class="value">${fmtNum(labaBulanIni)}</div>
+        <div class="sub">Pendapatan ${fmtNum(data.labaRugiBulanIni.pendapatan)} &middot; Beban ${fmtNum(data.labaRugiBulanIni.beban)}</div>
+      </div>
+      <div class="dash-card ${data.jurnal.totalDraft > 0 ? 'warn' : ''}">
+        <div class="label">Jurnal Menunggu Posting</div>
+        <div class="value">${data.jurnal.totalDraft}</div>
+        <div class="sub">berstatus DRAFT</div>
+      </div>
+      <div class="dash-card">
+        <div class="label">Jurnal Terposting Bulan Ini</div>
+        <div class="value">${data.jurnal.totalPostedBulanIni}</div>
+      </div>
+      ${tutupBukuCard}
+    </div>
+
+    <div class="dash-charts">
+      <div class="card">
+        <h4 style="margin-top:0;">Tren Pendapatan vs Beban (6 Bulan Terakhir)</h4>
+        <div id="trendChartArea"></div>
+      </div>
+      <div class="card">
+        <h4 style="margin-top:0;">Komposisi Neraca</h4>
+        <div id="donutChartArea"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h4 style="margin-top:0;">Top 5 Beban Bulan ${esc(data.periode)}</h4>
+      <div id="topBebanArea"></div>
+    </div>`;
+
+  renderTrendChart(data.trendBulanan);
+  renderNeracaDonut(data.neraca);
+  renderTopBebanBars(data.topBeban);
+};
+
+function renderTrendChart(trend) {
+  const area = document.getElementById('trendChartArea');
+  if (!trend || trend.length === 0) { area.innerHTML = '<p class="small-text">Belum ada data transaksi terposting.</p>'; return; }
+  const W = 560, H = 240, padL = 55, padB = 30, padT = 10, padR = 10;
+  const chartW = W - padL - padR, chartH = H - padT - padB;
+  const maxVal = Math.max(1, ...trend.flatMap(t => [t.pendapatan, t.beban]));
+  const n = trend.length;
+  const groupW = chartW / n;
+  const barW = Math.min(28, groupW / 3);
+  let bars = '', labels = '', gridLines = '';
+  for (let g = 0; g <= 4; g++) {
+    const y = padT + chartH - (g / 4) * chartH;
+    gridLines += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="#eef0f4" stroke-width="1"/>`;
+    gridLines += `<text x="${padL - 8}" y="${y + 4}" font-size="10" fill="#888" text-anchor="end">${fmtNum(maxVal * g / 4).split(',')[0]}</text>`;
+  }
+  trend.forEach((t, i) => {
+    const cx = padL + i * groupW + groupW / 2;
+    const hP = (t.pendapatan / maxVal) * chartH;
+    const hB = (t.beban / maxVal) * chartH;
+    bars += `<rect x="${cx - barW - 2}" y="${padT + chartH - hP}" width="${barW}" height="${hP}" fill="#1a9e5c" rx="2"><title>Pendapatan ${fmtNum(t.pendapatan)}</title></rect>`;
+    bars += `<rect x="${cx + 2}" y="${padT + chartH - hB}" width="${barW}" height="${hB}" fill="#d9363e" rx="2"><title>Beban ${fmtNum(t.beban)}</title></rect>`;
+    labels += `<text x="${cx}" y="${H - 10}" font-size="11" fill="#555" text-anchor="middle">${esc(t.periode.slice(5))}/${esc(t.periode.slice(2, 4))}</text>`;
+  });
+  area.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;">${gridLines}${bars}${labels}</svg>
+    <div class="chart-legend">
+      <span><span class="legend-dot" style="background:#1a9e5c;"></span>Pendapatan</span>
+      <span><span class="legend-dot" style="background:#d9363e;"></span>Beban</span>
+    </div>`;
+}
+
+function renderNeracaDonut(neraca) {
+  const area = document.getElementById('donutChartArea');
+  const parts = [
+    { label: 'Aset', value: Math.max(0, neraca.totalAset), color: '#1e5aa8' },
+    { label: 'Kewajiban', value: Math.max(0, neraca.totalKewajiban), color: '#d9363e' },
+    { label: 'Modal', value: Math.max(0, neraca.totalModal), color: '#1a9e5c' }
+  ];
+  const total = parts.reduce((s, p) => s + p.value, 0);
+  if (total <= 0) { area.innerHTML = '<p class="small-text">Belum ada data neraca.</p>'; return; }
+  let acc = 0;
+  const stops = parts.map(p => {
+    const start = (acc / total) * 360;
+    acc += p.value;
+    const end = (acc / total) * 360;
+    return `${p.color} ${start}deg ${end}deg`;
+  }).join(', ');
+  area.innerHTML = `
+    <div class="donut-wrap">
+      <div style="width:130px;height:130px;border-radius:50%;background:conic-gradient(${stops});flex-shrink:0;"></div>
+      <div style="flex:1;min-width:150px;">
+        ${parts.map(p => `<div class="chart-legend" style="margin:0 0 8px;"><span><span class="legend-dot" style="background:${p.color};"></span>${esc(p.label)}</span>
+          <span style="margin-left:auto;font-weight:600;">${total ? Math.round(p.value / total * 100) : 0}%</span></div>
+          <div class="small-text" style="margin:-6px 0 8px;">${fmtNum(p.value)}</div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function renderTopBebanBars(rows) {
+  const area = document.getElementById('topBebanArea');
+  if (!rows || rows.length === 0) { area.innerHTML = '<p class="small-text">Belum ada transaksi beban bulan ini.</p>'; return; }
+  const maxVal = Math.max(...rows.map(r => r.total));
+  area.innerHTML = rows.map(r => `
+    <div class="bar-list-row">
+      <div class="bar-list-label">${esc(r.nama_account)}</div>
+      <div class="bar-list-track"><div class="bar-list-fill" style="width:${maxVal ? (r.total / maxVal * 100) : 0}%"></div></div>
+      <div class="bar-list-value">${fmtNum(r.total)}</div>
+    </div>`).join('');
+}
+
 
 // ---------------------- MASTER: CABANG ----------------------
 PAGES.cabang = async function () {

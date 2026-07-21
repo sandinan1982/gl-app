@@ -203,4 +203,108 @@ router.get('/prediksi-laba-rugi', requirePermission('LAP_PREDIKSI', 'view'), sco
   });
 });
 
+// ============ DASHBOARD - ringkasan & data grafik untuk halaman utama ============
+router.get('/dashboard', scopeBranch, (req, res) => {
+  const branch = req.branchFilter || req.query.cabang_id || null;
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const periodeSekarang = todayStr.slice(0, 7);
+  const monthStart = periodeSekarang + '-01';
+
+  // ---- Neraca ringkas per hari ini ----
+  let neracaSql = `SELECT ac.kelompok_laporan, coa.saldo_normal, COALESCE(SUM(jd.debit),0) td, COALESCE(SUM(jd.kredit),0) tk
+    FROM chart_of_accounts coa
+    JOIN account_categories ac ON ac.kode_kategori = coa.kategori
+    LEFT JOIN journal_detail jd ON jd.kode_account = coa.kode_account
+    LEFT JOIN journal_voucher jv ON jv.no_bukti = jd.no_bukti AND jv.status='POSTED' AND jv.tanggal<=?`;
+  const neracaParams = [todayStr];
+  if (branch) { neracaSql += ' AND jv.cabang_id=?'; neracaParams.push(branch); }
+  neracaSql += ` WHERE ac.kelompok_laporan IN ('ASET','KEWAJIBAN','MODAL') AND coa.is_header=0 GROUP BY ac.kelompok_laporan`;
+  const neracaRows = db.prepare(neracaSql).all(...neracaParams);
+  let totalAset = 0, totalKewajiban = 0, totalModal = 0;
+  neracaRows.forEach(r => {
+    const saldo = r.saldo_normal === 'DEBIT' ? (r.td - r.tk) : (r.tk - r.td);
+    if (r.kelompok_laporan === 'ASET') totalAset += saldo;
+    if (r.kelompok_laporan === 'KEWAJIBAN') totalKewajiban += saldo;
+    if (r.kelompok_laporan === 'MODAL') totalModal += saldo;
+  });
+
+  // ---- Laba Rugi bulan berjalan ----
+  let plSql = `SELECT ac.kelompok_laporan, COALESCE(SUM(jd.debit),0) td, COALESCE(SUM(jd.kredit),0) tk
+    FROM chart_of_accounts coa
+    JOIN account_categories ac ON ac.kode_kategori = coa.kategori
+    LEFT JOIN journal_detail jd ON jd.kode_account = coa.kode_account
+    LEFT JOIN journal_voucher jv ON jv.no_bukti = jd.no_bukti AND jv.status='POSTED' AND jv.tanggal BETWEEN ? AND ?`;
+  const plParams = [monthStart, todayStr];
+  if (branch) { plSql += ' AND jv.cabang_id=?'; plParams.push(branch); }
+  plSql += ` WHERE ac.kelompok_laporan IN ('PENDAPATAN','BEBAN') GROUP BY ac.kelompok_laporan`;
+  const plRows = db.prepare(plSql).all(...plParams);
+  let pendapatanBulanIni = 0, bebanBulanIni = 0;
+  plRows.forEach(r => {
+    if (r.kelompok_laporan === 'PENDAPATAN') pendapatanBulanIni += (r.tk - r.td);
+    if (r.kelompok_laporan === 'BEBAN') bebanBulanIni += (r.td - r.tk);
+  });
+
+  // ---- Jumlah jurnal DRAFT (menunggu posting) & POSTED bulan ini ----
+  let draftSql = `SELECT COUNT(*) c FROM journal_voucher WHERE status='DRAFT'`;
+  const draftParams = [];
+  if (branch) { draftSql += ' AND cabang_id=?'; draftParams.push(branch); }
+  const totalDraft = db.prepare(draftSql).get(...draftParams).c;
+
+  let postedSql = `SELECT COUNT(*) c FROM journal_voucher WHERE status='POSTED' AND substr(tanggal,1,7)=?`;
+  const postedParams = [periodeSekarang];
+  if (branch) { postedSql += ' AND cabang_id=?'; postedParams.push(branch); }
+  const totalPostedBulanIni = db.prepare(postedSql).get(...postedParams).c;
+
+  // ---- Status Tutup Buku periode berjalan ----
+  let tutupBuku;
+  if (branch) {
+    const pc = db.prepare(`SELECT status FROM period_closing WHERE cabang_id=? AND periode=?`).get(branch, periodeSekarang);
+    tutupBuku = { mode: 'single', status: pc ? pc.status : 'OPEN' };
+  } else {
+    const branches = db.prepare('SELECT id FROM branches').all();
+    const closedList = db.prepare(`SELECT cabang_id FROM period_closing WHERE periode=? AND status='CLOSED'`).all(periodeSekarang);
+    const closedSet = new Set(closedList.map(r => r.cabang_id));
+    tutupBuku = { mode: 'multi', totalCabang: branches.length, closedCount: closedSet.size };
+  }
+
+  // ---- Tren bulanan Pendapatan vs Beban (6 bulan terakhir) ----
+  let trendSql = `SELECT ac.kelompok_laporan, substr(jv.tanggal,1,7) periode, SUM(jd.debit) td, SUM(jd.kredit) tk
+    FROM chart_of_accounts coa
+    JOIN account_categories ac ON ac.kode_kategori = coa.kategori
+    JOIN journal_detail jd ON jd.kode_account = coa.kode_account
+    JOIN journal_voucher jv ON jv.no_bukti = jd.no_bukti AND jv.status='POSTED'
+    WHERE ac.kelompok_laporan IN ('PENDAPATAN','BEBAN')`;
+  const trendParams = [];
+  if (branch) { trendSql += ' AND jv.cabang_id=?'; trendParams.push(branch); }
+  trendSql += ` GROUP BY ac.kelompok_laporan, periode ORDER BY periode`;
+  const trendRows = db.prepare(trendSql).all(...trendParams);
+  const periodeMap = {};
+  trendRows.forEach(r => {
+    if (!periodeMap[r.periode]) periodeMap[r.periode] = { periode: r.periode, pendapatan: 0, beban: 0 };
+    if (r.kelompok_laporan === 'PENDAPATAN') periodeMap[r.periode].pendapatan += (r.tk - r.td);
+    else periodeMap[r.periode].beban += (r.td - r.tk);
+  });
+  const trendBulanan = Object.values(periodeMap).sort((a, b) => a.periode.localeCompare(b.periode)).slice(-6);
+
+  // ---- Top 5 Beban bulan ini ----
+  let topBebanSql = `SELECT coa.kode_account, coa.nama_account, SUM(jd.debit - jd.kredit) total
+    FROM journal_detail jd
+    JOIN chart_of_accounts coa ON coa.kode_account = jd.kode_account
+    JOIN account_categories ac ON ac.kode_kategori = coa.kategori
+    JOIN journal_voucher jv ON jv.no_bukti = jd.no_bukti AND jv.status='POSTED' AND substr(jv.tanggal,1,7)=?`;
+  const topBebanParams = [periodeSekarang];
+  if (branch) { topBebanSql += ' AND jv.cabang_id=?'; topBebanParams.push(branch); }
+  topBebanSql += ` WHERE ac.kelompok_laporan='BEBAN' GROUP BY coa.kode_account HAVING total > 0 ORDER BY total DESC LIMIT 5`;
+  const topBeban = db.prepare(topBebanSql).all(...topBebanParams);
+
+  res.json({
+    tanggal: todayStr, periode: periodeSekarang,
+    neraca: { totalAset, totalKewajiban, totalModal },
+    labaRugiBulanIni: { pendapatan: pendapatanBulanIni, beban: bebanBulanIni, laba: pendapatanBulanIni - bebanBulanIni },
+    jurnal: { totalDraft, totalPostedBulanIni },
+    tutupBuku, trendBulanan, topBeban
+  });
+});
+
 module.exports = router;
