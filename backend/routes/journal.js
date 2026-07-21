@@ -45,8 +45,8 @@ router.get('/:no_bukti', requirePermission('TRX_JURNAL', 'view'), (req, res) => 
   if (!header) return res.status(404).json({ error: 'No bukti tidak ditemukan.' });
   const details = db.prepare(`SELECT jd.*, coa.nama_account, dept.nama_department FROM journal_detail jd
     JOIN chart_of_accounts coa ON coa.kode_account=jd.kode_account
-    LEFT JOIN departments dept ON dept.kode_department=jd.kode_department AND dept.cabang_id=?
-    WHERE jd.no_bukti=? ORDER BY jd.urutan`).all(header.cabang_id, req.params.no_bukti);
+    LEFT JOIN departments dept ON dept.kode_department=jd.kode_department
+    WHERE jd.no_bukti=? ORDER BY jd.urutan`).all(req.params.no_bukti);
   res.json({ header, details });
 });
 
@@ -147,6 +147,19 @@ router.post('/:no_bukti/post', requirePermission('TRX_POSTING', 'post'), (req, r
 
   db.prepare(`UPDATE journal_voucher SET status='POSTED', posted_by=?, posted_at=CURRENT_TIMESTAMP WHERE no_bukti=?`)
     .run(req.user.id, req.params.no_bukti);
+  res.json({ ok: true });
+});
+
+// BATAL POSTING - kembalikan jurnal yang sudah diposting menjadi DRAFT lagi
+router.post('/:no_bukti/unpost', requirePermission('TRX_BATALPOSTING', 'post'), (req, res) => {
+  const header = db.prepare('SELECT * FROM journal_voucher WHERE no_bukti=?').get(req.params.no_bukti);
+  if (!header) return res.status(404).json({ error: 'No bukti tidak ditemukan.' });
+  if (header.status !== 'POSTED') return res.status(400).json({ error: 'Jurnal ini belum diposting.' });
+  if (isPeriodClosed(header.cabang_id, header.tanggal))
+    return res.status(400).json({ error: 'Periode sudah tutup buku. Batalkan tutup buku terlebih dahulu sebelum batal posting.' });
+
+  db.prepare(`UPDATE journal_voucher SET status='DRAFT', posted_by=NULL, posted_at=NULL WHERE no_bukti=?`)
+    .run(req.params.no_bukti);
   res.json({ ok: true });
 });
 

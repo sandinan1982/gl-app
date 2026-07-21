@@ -1,26 +1,22 @@
 const express = require('express');
 const db = require('../db');
-const { authRequired, requirePermission, scopeBranch } = require('../middleware/auth');
+const { authRequired, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authRequired);
 
-router.get('/', requirePermission('MASTER_DEPT', 'view'), scopeBranch, (req, res) => {
-  let sql = `SELECT d.*, b.nama_cabang FROM departments d JOIN branches b ON b.id=d.cabang_id`;
-  const params = [];
-  if (req.branchFilter) { sql += ' WHERE d.cabang_id=?'; params.push(req.branchFilter); }
-  sql += ' ORDER BY d.kode_department';
-  res.json(db.prepare(sql).all(...params));
+router.get('/', requirePermission('MASTER_DEPT', 'view'), (req, res) => {
+  res.json(db.prepare('SELECT * FROM departments ORDER BY kode_department').all());
 });
 
 router.post('/', requirePermission('MASTER_DEPT', 'add'), (req, res) => {
-  const { kode_department, nama_department, cabang_id } = req.body;
-  if (!kode_department || !nama_department || !cabang_id)
-    return res.status(400).json({ error: 'Kode, nama department, dan cabang wajib diisi.' });
+  const { kode_department, nama_department } = req.body;
+  if (!kode_department || !nama_department)
+    return res.status(400).json({ error: 'Kode dan nama department wajib diisi.' });
   try {
-    const info = db.prepare('INSERT INTO departments (kode_department, nama_department, cabang_id) VALUES (?,?,?)')
-      .run(kode_department.trim(), nama_department.trim(), cabang_id);
+    const info = db.prepare('INSERT INTO departments (kode_department, nama_department) VALUES (?,?)')
+      .run(kode_department.trim(), nama_department.trim());
     res.json({ id: info.lastInsertRowid });
-  } catch (e) { res.status(400).json({ error: 'Kode department sudah dipakai pada cabang ini.' }); }
+  } catch (e) { res.status(400).json({ error: 'Kode department sudah digunakan.' }); }
 });
 
 router.put('/:id', requirePermission('MASTER_DEPT', 'edit'), (req, res) => {
@@ -31,6 +27,10 @@ router.put('/:id', requirePermission('MASTER_DEPT', 'edit'), (req, res) => {
 });
 
 router.delete('/:id', requirePermission('MASTER_DEPT', 'delete'), (req, res) => {
+  const dept = db.prepare('SELECT * FROM departments WHERE id=?').get(req.params.id);
+  if (!dept) return res.status(404).json({ error: 'Department tidak ditemukan.' });
+  const usedSub = db.prepare('SELECT COUNT(*) c FROM sub_departments WHERE kode_department=?').get(dept.kode_department).c;
+  if (usedSub > 0) return res.status(400).json({ error: 'Department ini masih dipakai oleh Sub Department, tidak bisa dihapus.' });
   db.prepare('DELETE FROM departments WHERE id=?').run(req.params.id);
   res.json({ ok: true });
 });

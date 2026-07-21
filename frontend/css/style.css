@@ -27,6 +27,11 @@ button{cursor:pointer;font-family:inherit;}
 .menu-item:hover{background:rgba(255,255,255,.06);}
 .menu-item.active{background:rgba(255,255,255,.12);border-left-color:#4d9fff;color:#fff;font-weight:600;}
 
+.branch-switcher{padding:12px 20px 14px;border-bottom:1px solid rgba(255,255,255,.1);}
+.branch-switcher label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#7f96bc;margin-bottom:5px;}
+.branch-switcher select{width:100%;padding:7px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:#1a3660;color:#fff;font-size:13px;}
+.branch-switcher .fixed-branch{font-size:13px;color:#dbe4f0;font-weight:600;padding:4px 0;}
+
 .main{flex:1;display:flex;flex-direction:column;min-width:0;}
 .topbar{background:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);font-size:18px;font-weight:600;}
 .userinfo{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:12px;}

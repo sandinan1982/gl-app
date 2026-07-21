@@ -10,11 +10,20 @@ CREATE TABLE IF NOT EXISTS branches (
   status TEXT NOT NULL DEFAULT 'AKTIF'
 );
 
+CREATE TABLE IF NOT EXISTS account_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kode_kategori TEXT UNIQUE NOT NULL,
+  nama_kategori TEXT NOT NULL,
+  kelompok_laporan TEXT NOT NULL CHECK(kelompok_laporan IN ('ASET','KEWAJIBAN','MODAL','PENDAPATAN','BEBAN')),
+  saldo_normal TEXT NOT NULL CHECK(saldo_normal IN ('DEBIT','KREDIT')),
+  status TEXT NOT NULL DEFAULT 'AKTIF'
+);
+
 CREATE TABLE IF NOT EXISTS chart_of_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kode_account TEXT UNIQUE NOT NULL,
   nama_account TEXT NOT NULL,
-  kategori TEXT NOT NULL CHECK(kategori IN ('ASET','KEWAJIBAN','MODAL','PENDAPATAN','BEBAN')),
+  kategori TEXT NOT NULL,
   saldo_normal TEXT NOT NULL CHECK(saldo_normal IN ('DEBIT','KREDIT')),
   parent_kode TEXT,
   is_header INTEGER NOT NULL DEFAULT 0,
@@ -23,11 +32,18 @@ CREATE TABLE IF NOT EXISTS chart_of_accounts (
 
 CREATE TABLE IF NOT EXISTS departments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  kode_department TEXT NOT NULL,
+  kode_department TEXT UNIQUE NOT NULL,
   nama_department TEXT NOT NULL,
-  cabang_id INTEGER NOT NULL REFERENCES branches(id),
-  status TEXT NOT NULL DEFAULT 'AKTIF',
-  UNIQUE(kode_department, cabang_id)
+  status TEXT NOT NULL DEFAULT 'AKTIF'
+);
+
+CREATE TABLE IF NOT EXISTS sub_departments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kode_sub_department TEXT UNIQUE NOT NULL,
+  nama_sub_department TEXT NOT NULL,
+  kode_department TEXT NOT NULL REFERENCES departments(kode_department),
+  tipe TEXT NOT NULL CHECK(tipe IN ('UMUM','NEQ')),
+  status TEXT NOT NULL DEFAULT 'AKTIF'
 );
 
 CREATE TABLE IF NOT EXISTS roles (
