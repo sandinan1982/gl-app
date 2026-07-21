@@ -150,19 +150,6 @@ router.post('/:no_bukti/post', requirePermission('TRX_POSTING', 'post'), (req, r
   res.json({ ok: true });
 });
 
-// BATAL POSTING - kembalikan jurnal yang sudah diposting menjadi DRAFT lagi
-router.post('/:no_bukti/unpost', requirePermission('TRX_BATALPOSTING', 'post'), (req, res) => {
-  const header = db.prepare('SELECT * FROM journal_voucher WHERE no_bukti=?').get(req.params.no_bukti);
-  if (!header) return res.status(404).json({ error: 'No bukti tidak ditemukan.' });
-  if (header.status !== 'POSTED') return res.status(400).json({ error: 'Jurnal ini belum diposting.' });
-  if (isPeriodClosed(header.cabang_id, header.tanggal))
-    return res.status(400).json({ error: 'Periode sudah tutup buku. Batalkan tutup buku terlebih dahulu sebelum batal posting.' });
-
-  db.prepare(`UPDATE journal_voucher SET status='DRAFT', posted_by=NULL, posted_at=NULL WHERE no_bukti=?`)
-    .run(req.params.no_bukti);
-  res.json({ ok: true });
-});
-
 module.exports = router;
 module.exports.isPeriodClosed = isPeriodClosed;
 module.exports.periodeOf = periodeOf;

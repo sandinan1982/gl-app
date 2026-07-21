@@ -8,7 +8,6 @@ app.use(express.json());
 
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/branches', require('./routes/branches'));
-app.use('/api/categories', require('./routes/categories'));
 app.use('/api/coa', require('./routes/coa'));
 app.use('/api/departments', require('./routes/departments'));
 app.use('/api/journal', require('./routes/journal'));

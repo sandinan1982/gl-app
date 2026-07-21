@@ -10,20 +10,11 @@ CREATE TABLE IF NOT EXISTS branches (
   status TEXT NOT NULL DEFAULT 'AKTIF'
 );
 
-CREATE TABLE IF NOT EXISTS account_categories (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  kode_kategori TEXT UNIQUE NOT NULL,
-  nama_kategori TEXT NOT NULL,
-  kelompok_laporan TEXT NOT NULL CHECK(kelompok_laporan IN ('ASET','KEWAJIBAN','MODAL','PENDAPATAN','BEBAN')),
-  saldo_normal TEXT NOT NULL CHECK(saldo_normal IN ('DEBIT','KREDIT')),
-  status TEXT NOT NULL DEFAULT 'AKTIF'
-);
-
 CREATE TABLE IF NOT EXISTS chart_of_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kode_account TEXT UNIQUE NOT NULL,
   nama_account TEXT NOT NULL,
-  kategori TEXT NOT NULL,
+  kategori TEXT NOT NULL CHECK(kategori IN ('ASET','KEWAJIBAN','MODAL','PENDAPATAN','BEBAN')),
   saldo_normal TEXT NOT NULL CHECK(saldo_normal IN ('DEBIT','KREDIT')),
   parent_kode TEXT,
   is_header INTEGER NOT NULL DEFAULT 0,

@@ -14,49 +14,19 @@ db.pragma('foreign_keys = ON');
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 db.exec(schema);
 
-// ================== MIGRASI DATABASE LAMA ==================
-// Database yang sudah pernah dibuat sebelum fitur Kategori Akun ada masih
-// punya CHECK constraint lama pada chart_of_accounts.kategori (hanya 5 nilai tetap).
-// Migrasi ini membangun ulang tabelnya tanpa constraint itu, tanpa menghapus data.
-function migrateChartOfAccountsConstraint() {
-  const info = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='chart_of_accounts'`).get();
-  if (info && info.sql && info.sql.includes('CHECK(kategori')) {
-    db.exec(`
-      ALTER TABLE chart_of_accounts RENAME TO chart_of_accounts_old;
-      CREATE TABLE chart_of_accounts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        kode_account TEXT UNIQUE NOT NULL,
-        nama_account TEXT NOT NULL,
-        kategori TEXT NOT NULL,
-        saldo_normal TEXT NOT NULL CHECK(saldo_normal IN ('DEBIT','KREDIT')),
-        parent_kode TEXT,
-        is_header INTEGER NOT NULL DEFAULT 0,
-        status TEXT NOT NULL DEFAULT 'AKTIF'
-      );
-      INSERT INTO chart_of_accounts (id, kode_account, nama_account, kategori, saldo_normal, parent_kode, is_header, status)
-        SELECT id, kode_account, nama_account, kategori, saldo_normal, parent_kode, is_header, status FROM chart_of_accounts_old;
-      DROP TABLE chart_of_accounts_old;
-    `);
-  }
-}
-migrateChartOfAccountsConstraint();
-
 // ================== SEED DATA AWAL ==================
 function seed() {
   const menuList = [
     ['MASTER_CABANG', 'Kode Cabang', 'Master Data'],
-    ['MASTER_KATEGORI', 'Kategori Akun', 'Master Data'],
     ['MASTER_COA', 'Kode Account', 'Master Data'],
     ['MASTER_DEPT', 'Kode Department', 'Master Data'],
     ['TRX_JURNAL', 'Jurnal Transaksi', 'Transaksi'],
     ['TRX_POSTING', 'Posting Transaksi', 'Transaksi'],
-    ['TRX_BATALPOSTING', 'Batal Posting', 'Transaksi'],
     ['TRX_TUTUPBUKU', 'Tutup Buku', 'Transaksi'],
     ['TRX_BATALTUTUPBUKU', 'Batal Tutup Buku', 'Transaksi'],
     ['LAP_NERACA', 'Laporan Neraca', 'Laporan'],
     ['LAP_LABARUGI', 'Laporan Laba Rugi', 'Laporan'],
     ['LAP_HARIAN', 'Laporan Transaksi Harian', 'Laporan'],
-    ['LAP_PREDIKSI', 'Prediksi Laba Rugi (AI)', 'Laporan'],
     ['SET_USER', 'Pembuatan User', 'Setting'],
     ['SET_HAKAKSES', 'Hak Akses User', 'Setting']
   ];
@@ -94,19 +64,6 @@ function seed() {
     const hash = bcrypt.hashSync('admin123', 10);
     db.prepare(`INSERT INTO users (username, password_hash, nama_lengkap, role_id, akses_semua_cabang)
       VALUES (?,?,?,?,1)`).run('admin', hash, 'Administrator', adminRole.id);
-  }
-
-  const catCount = db.prepare('SELECT COUNT(*) c FROM account_categories').get().c;
-  if (catCount === 0) {
-    const insCat = db.prepare(`INSERT INTO account_categories (kode_kategori, nama_kategori, kelompok_laporan, saldo_normal) VALUES (?,?,?,?)`);
-    const seedCat = [
-      ['ASET', 'Aset', 'ASET', 'DEBIT'],
-      ['KEWAJIBAN', 'Kewajiban', 'KEWAJIBAN', 'KREDIT'],
-      ['MODAL', 'Modal', 'MODAL', 'KREDIT'],
-      ['PENDAPATAN', 'Pendapatan', 'PENDAPATAN', 'KREDIT'],
-      ['BEBAN', 'Beban', 'BEBAN', 'DEBIT']
-    ];
-    seedCat.forEach(c => insCat.run(...c));
   }
 
   const coaCount = db.prepare('SELECT COUNT(*) c FROM chart_of_accounts').get().c;
