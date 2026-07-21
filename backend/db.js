@@ -10,11 +10,14 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
-// Jalankan schema (idempotent, aman dijalankan berkali-kali)
-const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-db.exec(schema);
+// ================== MIGRASI / PERBAIKAN DATABASE LAMA ==================
+// PENTING: semua migrasi di bawah ini WAJIB dijalankan SEBELUM membuat tabel baru
+// (schema.sql). Saat SQLite me-rename sebuah tabel (mis. departments -> departments_old),
+// tabel LAIN yang punya FOREIGN KEY ke tabel itu otomatis ikut menunjuk ke nama sementara
+// tersebut. Kalau tabel yang mereferensikannya (mis. sub_departments) sudah dibuat lebih
+// dulu, referensinya jadi rusak begitu tabel sementara itu dihapus. Menjalankan migrasi
+// SEBELUM tabel baru dibuat mencegah masalah ini sejak awal.
 
-// ================== MIGRASI DATABASE LAMA ==================
 // Database yang sudah pernah dibuat sebelum fitur Kategori Akun ada masih
 // punya CHECK constraint lama pada chart_of_accounts.kategori (hanya 5 nilai tetap).
 // Migrasi ini membangun ulang tabelnya tanpa constraint itu, tanpa menghapus data.
@@ -39,7 +42,30 @@ function migrateChartOfAccountsConstraint() {
     `);
   }
 }
-migrateChartOfAccountsConstraint();
+
+// Perbaikan: kalau journal_detail sempat dibuat SEBELUM migrasi chart_of_accounts di atas
+// pernah berjalan (versi database lama), foreign key kode_account-nya akan rusak menunjuk
+// ke "chart_of_accounts_old" yang sudah dihapus. Bangun ulang jika terdeteksi rusak.
+function repairJournalDetailForeignKey() {
+  const info = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='journal_detail'`).get();
+  if (info && info.sql && info.sql.includes('chart_of_accounts_old')) {
+    db.exec(`
+      ALTER TABLE journal_detail RENAME TO journal_detail_old;
+      CREATE TABLE journal_detail (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        no_bukti TEXT NOT NULL REFERENCES journal_voucher(no_bukti),
+        urutan INTEGER NOT NULL,
+        kode_account TEXT NOT NULL REFERENCES chart_of_accounts(kode_account),
+        kode_department TEXT,
+        debit REAL NOT NULL DEFAULT 0,
+        kredit REAL NOT NULL DEFAULT 0,
+        keterangan TEXT
+      );
+      INSERT INTO journal_detail SELECT * FROM journal_detail_old;
+      DROP TABLE journal_detail_old;
+    `);
+  }
+}
 
 // Migrasi departments: sebelumnya wajib terikat cabang_id, sekarang jadi daftar department
 // global (tanpa cabang) supaya sesuai struktur baru: Kode Department, Nama Department, Status.
@@ -60,7 +86,40 @@ function migrateDepartments() {
     `);
   }
 }
+
+// Perbaikan: kalau sub_departments sempat dibuat SEBELUM migrasi departments di atas
+// pernah berjalan, foreign key kode_department-nya akan rusak menunjuk ke
+// "departments_old" yang sudah dihapus (ini penyebab error "no such table: departments_old").
+function repairSubDepartmentsForeignKey() {
+  const info = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sub_departments'`).get();
+  if (info && info.sql && info.sql.includes('departments_old')) {
+    db.exec(`
+      ALTER TABLE sub_departments RENAME TO sub_departments_old;
+      CREATE TABLE sub_departments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kode_sub_department TEXT UNIQUE NOT NULL,
+        nama_sub_department TEXT NOT NULL,
+        kode_department TEXT NOT NULL REFERENCES departments(kode_department),
+        tipe TEXT NOT NULL CHECK(tipe IN ('UMUM','NEQ')),
+        status TEXT NOT NULL DEFAULT 'AKTIF'
+      );
+      INSERT INTO sub_departments SELECT * FROM sub_departments_old;
+      DROP TABLE sub_departments_old;
+    `);
+  }
+}
+
+// Urutan wajib: benahi chart_of_accounts & departments dulu (beserta tabel yang mungkin
+// sudah terlanjur rusak mereferensikannya), baru setelah itu tabel baru dibuat oleh schema.sql.
+migrateChartOfAccountsConstraint();
+repairJournalDetailForeignKey();
 migrateDepartments();
+repairSubDepartmentsForeignKey();
+
+// Jalankan schema (idempotent, aman dijalankan berkali-kali) - membuat tabel yang
+// belum ada, dengan tabel referensi yang sudah dalam kondisi benar di atas.
+const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+db.exec(schema);
 
 // ================== SEED DATA AWAL ==================
 function seed() {
