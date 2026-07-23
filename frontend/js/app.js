@@ -427,6 +427,7 @@ PAGES.coa = async function () {
   const rows = await api('/coa'); state.coa = rows; coaListCache = rows;
   if (!state.categories.length) { try { state.categories = await api('/categories'); } catch (e) { /* ignore */ } }
   const canAdd = hasPerm('MASTER_COA', 'add'), canDel = hasPerm('MASTER_COA', 'delete'), canEdit = hasPerm('MASTER_COA', 'edit');
+  const canImport = canAdd && canDel;
   document.getElementById('content').innerHTML = `
     <div class="card">
       ${canAdd ? `<div class="toolbar">
@@ -439,6 +440,13 @@ PAGES.coa = async function () {
         <button class="btn" id="btnAdd">+ Tambah Account</button>
       </div>` : ''}
       <p class="small-text">Buat dulu <strong>Akun Induk</strong> (centang "Jadikan Akun Induk", kosongkan "Akun Induk Dari"), baru buat <strong>Akun Anak</strong> di bawahnya (pilih induknya, jangan centang header). Akun Induk hanya untuk pengelompokan laporan &mdash; tidak bisa dipakai langsung untuk input jurnal.</p>
+      ${canImport ? `<div class="card" style="background:#fff8f0;border:1px solid #f0d9b5;margin-top:0;">
+        <h4 style="margin-top:0;">Import Kategori &amp; Kode Account dari Excel</h4>
+        <p class="small-text">Mengganti <strong>seluruh</strong> Kategori Akun dan Kode Account yang ada saat ini dengan data dari file. Akun yang masih dipakai transaksi otomatis dilindungi (tidak dihapus). Format kolom: A=Kode Account, B=Nama Account, C=Sub Department (diabaikan), D=Kategori.</p>
+        <input type="file" id="importFile" accept=".xlsx,.xls">
+        <button class="btn danger small" id="btnImport">Import &amp; Ganti Semua Data</button>
+        <div id="importMsg" style="margin-top:10px;"></div>
+      </div>` : ''}
       <div id="msgBox"></div>
       <div id="editArea"></div>
       <table><thead><tr><th>Kode</th><th>Nama Account</th><th>Tipe</th><th>Induk</th><th>Kategori</th><th>Saldo Normal</th><th>Status</th><th></th></tr></thead>
@@ -454,6 +462,25 @@ PAGES.coa = async function () {
         </td>
       </tr>`).join('')}</tbody></table>
     </div>`;
+  if (canImport) document.getElementById('btnImport').onclick = async () => {
+    const fileInput = document.getElementById('importFile');
+    if (!fileInput.files.length) { showMsg('importMsg', 'Pilih file Excel terlebih dahulu.', 'error'); return; }
+    if (!confirm('Semua Kategori Akun dan Kode Account yang ada SEKARANG akan dihapus dan diganti dengan data dari file ini (kecuali akun yang masih dipakai transaksi). Lanjutkan?')) return;
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    try {
+      const res = await fetch('/api/coa/import-excel', { method: 'POST', headers: { 'Authorization': 'Bearer ' + state.token }, body: fd });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Import gagal.');
+      let msg = `Berhasil: ${result.categoriesImported} kategori, ${result.indukImported} akun induk, ${result.anakImported} akun anak.`;
+      if (result.accountsProtected.length) msg += ` ${result.accountsProtected.length} akun lama dilindungi (masih dipakai transaksi): ${result.accountsProtected.join(', ')}.`;
+      if (result.anakTanpaInduk.length) msg += ` ${result.anakTanpaInduk.length} akun anak dilewati karena induknya tidak ditemukan.`;
+      if (result.warnings.length) msg += ' Catatan: ' + result.warnings.join(' ');
+      showMsg('importMsg', msg, result.accountsProtected.length || result.anakTanpaInduk.length ? 'error' : 'success');
+      state.categories = await api('/categories');
+      setTimeout(() => goPage('coa', 'Kode Account'), 2500);
+    } catch (e) { showMsg('importMsg', e.message, 'error'); }
+  };
   if (canAdd) document.getElementById('btnAdd').onclick = async () => {
     const body = {
       kode_account: document.getElementById('f_kode').value.trim(),
