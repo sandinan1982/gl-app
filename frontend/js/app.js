@@ -799,7 +799,7 @@ function renderDetailRows(readOnly) {
   const body = document.getElementById('jurnalDetailBody');
   body.innerHTML = jurnalRows.map((r, i) => `<tr>
     <td>${!readOnly ? `<input type="checkbox" ${r.selected ? 'checked' : ''} onchange="jurnalRows[${i}].selected=this.checked">` : ''}</td>
-    <td><select onchange="jurnalRows[${i}].kode_account=this.value" ${readOnly ? 'disabled' : ''}><option value="">-- pilih --</option>${coaOptions(r.kode_account)}</select></td>
+    <td><select onchange="jurnalRows[${i}].kode_account=this.value; jurnalRows[${i}].aiSuggested=false;" ${readOnly ? 'disabled' : ''}><option value="">-- pilih --</option>${coaOptions(r.kode_account)}</select>${r.aiSuggested ? '<span class="badge open small" style="margin-left:5px;" title="Disarankan otomatis berdasarkan riwayat jurnal">✨ AI</span>' : ''}</td>
     <td><select onchange="jurnalRows[${i}].kode_department=this.value" ${readOnly ? 'disabled' : ''}>${deptOptions(r.kode_department)}</select></td>
     <td><input type="number" step="0.01" value="${r.debit || 0}" style="width:110px" onchange="handleAmountChange(${i}, 'debit', parseFloat(this.value)||0)" ${readOnly ? 'disabled' : ''}></td>
     <td><input type="number" step="0.01" value="${r.kredit || 0}" style="width:110px" onchange="handleAmountChange(${i}, 'kredit', parseFloat(this.value)||0)" ${readOnly ? 'disabled' : ''}></td>
@@ -877,12 +877,43 @@ window.handleAmountChange = function (i, field, value) {
   }
   syncPairedRow(i);
   renderDetailRows(false);
+  if (field === 'debit' && value > 0) trySuggestCredit(i);
 };
 window.handleKetChange = function (i, value) {
   jurnalRows[i].keterangan = value;
   syncPairedRow(i);
   renderDetailRows(false);
+  if (jurnalRows[i].debit > 0) trySuggestCredit(i);
 };
+
+// AI sederhana: sarankan akun KREDIT pasangan berdasarkan pola jurnal yang sudah pernah
+// diposting (akun apa yang paling sering dipasangkan dengan akun debit ini), dibantu
+// kecocokan kata pada keterangan. Hanya mengisi otomatis jika baris pasangan masih kosong,
+// tidak akan menimpa pilihan yang sudah diinput manual oleh pengguna.
+let suggestCreditToken = 0;
+async function trySuggestCredit(sourceIdx) {
+  const row = jurnalRows[sourceIdx];
+  if (!row || !row.kode_account || !(row.debit > 0)) return;
+  if (row.pairWith === undefined || row.pairWith === null) return;
+  const targetIdx = row.pairWith;
+  if (!jurnalRows[targetIdx] || jurnalRows[targetIdx].kode_account) return; // sudah diisi, jangan timpa
+
+  const myToken = ++suggestCreditToken;
+  const cabangEl = document.getElementById('j_cabang');
+  const cabangId = cabangEl ? cabangEl.value : '';
+  const qs = new URLSearchParams({ debit_kode_account: row.kode_account, keterangan: row.keterangan || '' });
+  if (cabangId) qs.set('cabang_id', cabangId);
+  try {
+    const res = await api('/journal/suggest-credit?' + qs.toString());
+    // Batalkan hasil basi kalau sudah ada input baru lagi setelah request ini dikirim
+    if (myToken !== suggestCreditToken) return;
+    if (res.suggestion && jurnalRows[targetIdx] && !jurnalRows[targetIdx].kode_account) {
+      jurnalRows[targetIdx].kode_account = res.suggestion.kode_account;
+      jurnalRows[targetIdx].aiSuggested = true;
+      renderDetailRows(false);
+    }
+  } catch (e) { /* saran AI bersifat opsional; diamkan kalau gagal, tidak mengganggu input manual */ }
+}
 
 window.viewJurnal = async function (no_bukti) {
   try {

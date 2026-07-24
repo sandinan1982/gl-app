@@ -38,6 +38,46 @@ router.get('/', requirePermission('TRX_JURNAL', 'view'), scopeBranch, (req, res)
   res.json(db.prepare(sql).all(...params));
 });
 
+// ============ PREDIKSI AI: sarankan akun KREDIT berdasarkan akun DEBIT + keterangan ============
+// Belajar dari pola jurnal yang sudah pernah diposting: akun apa yang paling sering
+// muncul sebagai lawan kredit dari akun debit yang sedang diinput, dibantu kecocokan
+// kata pada keterangan untuk mempersempit konteks bila tersedia.
+router.get('/suggest-credit', requirePermission('TRX_JURNAL', 'add'), (req, res) => {
+  const { debit_kode_account, keterangan, cabang_id } = req.query;
+  if (!debit_kode_account) return res.status(400).json({ error: 'Parameter debit_kode_account wajib diisi.' });
+
+  function runQuery(useKeterangan) {
+    let sql = `SELECT jd2.kode_account, coa2.nama_account, COUNT(DISTINCT jd1.no_bukti) freq
+      FROM journal_detail jd1
+      JOIN journal_voucher jv ON jv.no_bukti = jd1.no_bukti AND jv.status='POSTED'
+      JOIN journal_detail jd2 ON jd2.no_bukti = jd1.no_bukti AND jd2.id != jd1.id AND jd2.kredit > 0
+      JOIN chart_of_accounts coa2 ON coa2.kode_account = jd2.kode_account
+      WHERE jd1.kode_account = ? AND jd1.debit > 0`;
+    const params = [debit_kode_account];
+    if (cabang_id) { sql += ' AND jv.cabang_id = ?'; params.push(cabang_id); }
+    if (useKeterangan) {
+      const words = (keterangan || '').trim().split(/\s+/).filter(w => w.length >= 3);
+      if (words.length === 0) return null;
+      const conds = words.map(() => `(jd1.keterangan LIKE ? OR jv.keterangan LIKE ?)`).join(' OR ');
+      sql += ` AND (${conds})`;
+      words.forEach(w => { params.push(`%${w}%`, `%${w}%`); });
+    }
+    sql += ` GROUP BY jd2.kode_account ORDER BY freq DESC LIMIT 5`;
+    return db.prepare(sql).all(...params);
+  }
+
+  let rows = runQuery(true);
+  let method = 'Kecocokan keterangan + riwayat jurnal';
+  if (!rows || rows.length === 0) { rows = runQuery(false); method = 'Frekuensi riwayat jurnal'; }
+  if (!rows || rows.length === 0) return res.json({ suggestion: null, alternatives: [], method: 'Belum ada riwayat untuk akun ini' });
+
+  res.json({
+    suggestion: { kode_account: rows[0].kode_account, nama_account: rows[0].nama_account, freq: rows[0].freq },
+    alternatives: rows.slice(1),
+    method
+  });
+});
+
 // DETAIL voucher (header + lines)
 router.get('/:no_bukti', requirePermission('TRX_JURNAL', 'view'), (req, res) => {
   const header = db.prepare(`SELECT v.*, b.nama_cabang FROM journal_voucher v
