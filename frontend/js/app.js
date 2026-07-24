@@ -540,12 +540,20 @@ let deptListCache = [];
 PAGES.dept = async function () {
   const rows = await api('/departments'); state.departments = rows; deptListCache = rows;
   const canAdd = hasPerm('MASTER_DEPT', 'add'), canDel = hasPerm('MASTER_DEPT', 'delete'), canEdit = hasPerm('MASTER_DEPT', 'edit');
+  const canImport = canAdd && canDel;
   document.getElementById('content').innerHTML = `
     <div class="card">
       ${canAdd ? `<div class="toolbar">
         <div class="field"><label>Kode Department</label><input id="f_kode" maxlength="20"></div>
         <div class="field"><label>Nama Department</label><input id="f_nama"></div>
         <button class="btn" id="btnAdd">+ Tambah Department</button>
+      </div>` : ''}
+      ${canImport ? `<div class="card" style="background:#fff8f0;border:1px solid #f0d9b5;margin-top:0;">
+        <h4 style="margin-top:0;">Import Department &amp; Sub Department dari Excel</h4>
+        <p class="small-text">Mengganti <strong>seluruh</strong> Kode Department dan Sub Department yang ada saat ini. File harus punya sheet bernama <strong>"dept"</strong> dan <strong>"sub dept"</strong> (kolom A=Kode, B=Nama).</p>
+        <input type="file" id="importFile" accept=".xlsx,.xls">
+        <button class="btn danger small" id="btnImport">Import &amp; Ganti Semua Data</button>
+        <div id="importMsg" style="margin-top:10px;"></div>
       </div>` : ''}
       <div id="msgBox"></div>
       <div id="editArea"></div>
@@ -566,6 +574,23 @@ PAGES.dept = async function () {
     };
     try { await api('/departments', { method: 'POST', body: JSON.stringify(body) }); goPage('dept', 'Kode Department'); }
     catch (e) { showMsg('msgBox', e.message, 'error'); }
+  };
+  if (canImport) document.getElementById('btnImport').onclick = async () => {
+    const fileInput = document.getElementById('importFile');
+    if (!fileInput.files.length) { showMsg('importMsg', 'Pilih file Excel terlebih dahulu.', 'error'); return; }
+    if (!confirm('Semua Kode Department dan Sub Department yang ada SEKARANG akan dihapus dan diganti dengan data dari file ini. Lanjutkan?')) return;
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    try {
+      const res = await fetch('/api/departments/import-excel', { method: 'POST', headers: { 'Authorization': 'Bearer ' + state.token }, body: fd });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Import gagal.');
+      let msg = `Berhasil: ${result.departmentsImported} department, ${result.subDepartmentsImported} sub department.`;
+      if (result.subDepartmentsSkippedNoParent.length) msg += ` ${result.subDepartmentsSkippedNoParent.length} sub department dilewati (kode induk tidak ditemukan): ${result.subDepartmentsSkippedNoParent.join(', ')}.`;
+      showMsg('importMsg', msg, result.subDepartmentsSkippedNoParent.length ? 'error' : 'success');
+      state.subdepartments = await api('/subdepartments');
+      setTimeout(() => goPage('dept', 'Kode Department'), 2500);
+    } catch (e) { showMsg('importMsg', e.message, 'error'); }
   };
 };
 window.editDeptForm = function (id) {
