@@ -5,7 +5,8 @@ const router = express.Router();
 router.use(authRequired);
 
 router.get('/', requirePermission('MASTER_DEPT', 'view'), (req, res) => {
-  res.json(db.prepare('SELECT * FROM departments ORDER BY kode_department').all());
+  // Urutkan berdasarkan angka kode department (bukan urutan teks) supaya tidak lompat-lompat.
+  res.json(db.prepare('SELECT * FROM departments ORDER BY CAST(kode_department AS INTEGER), kode_department').all());
 });
 
 router.post('/', requirePermission('MASTER_DEPT', 'add'), (req, res) => {

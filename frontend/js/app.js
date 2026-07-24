@@ -627,6 +627,7 @@ PAGES.subdept = async function () {
   if (!state.departments.length) { try { state.departments = await api('/departments'); } catch (e) { /* ignore */ } }
   const canAdd = hasPerm('MASTER_SUBDEPT', 'add'), canDel = hasPerm('MASTER_SUBDEPT', 'delete'), canEdit = hasPerm('MASTER_SUBDEPT', 'edit');
   const deptSelectOptions = () => state.departments.filter(d => d.status === 'AKTIF').map(d => `<option value="${esc(d.kode_department)}">${esc(d.kode_department)} - ${esc(d.nama_department)}</option>`).join('');
+  const canImport = canAdd && canDel;
   document.getElementById('content').innerHTML = `
     <div class="card">
       <p class="small-text">Sub Department wajib dikaitkan ke salah satu Kode Department yang sudah ada, dengan tipe Umum atau NEQ.</p>
@@ -636,6 +637,13 @@ PAGES.subdept = async function () {
         <div class="field"><label>Kode Department</label><select id="f_dept">${deptSelectOptions()}</select></div>
         <div class="field"><label>Tipe</label><select id="f_tipe"><option value="UMUM">Umum</option><option value="NEQ">NEQ</option></select></div>
         <button class="btn" id="btnAdd">+ Tambah Sub Department</button>
+      </div>` : ''}
+      ${canImport ? `<div class="card" style="background:#fff8f0;border:1px solid #f0d9b5;margin-top:0;">
+        <h4 style="margin-top:0;">Import Sub Department dari Excel</h4>
+        <p class="small-text">Mengganti <strong>seluruh</strong> Sub Department yang ada saat ini (Kode Department tidak ikut berubah). Prioritas sheet <strong>"revisi sub dept"</strong> (kolom: no, kode+nama department induk, nama sub department &ndash; tipe NEQ otomatis dideteksi dari kata "NEQ" di nama). Kode Department yang direferensikan harus sudah ada.</p>
+        <input type="file" id="importFile" accept=".xlsx,.xls">
+        <button class="btn danger small" id="btnImport">Import &amp; Ganti Semua Sub Department</button>
+        <div id="importMsg" style="margin-top:10px;"></div>
       </div>` : ''}
       <div id="msgBox"></div>
       <div id="editArea"></div>
@@ -660,6 +668,22 @@ PAGES.subdept = async function () {
     };
     try { await api('/subdepartments', { method: 'POST', body: JSON.stringify(body) }); goPage('subdept', 'Sub Department'); }
     catch (e) { showMsg('msgBox', e.message, 'error'); }
+  };
+  if (canImport) document.getElementById('btnImport').onclick = async () => {
+    const fileInput = document.getElementById('importFile');
+    if (!fileInput.files.length) { showMsg('importMsg', 'Pilih file Excel terlebih dahulu.', 'error'); return; }
+    if (!confirm('Semua Sub Department yang ada SEKARANG akan dihapus dan diganti dengan data dari file ini. Lanjutkan?')) return;
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    try {
+      const res = await fetch('/api/subdepartments/import-excel', { method: 'POST', headers: { 'Authorization': 'Bearer ' + state.token }, body: fd });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Import gagal.');
+      let msg = `Berhasil: ${result.subDepartmentsImported} sub department.`;
+      if (result.skippedNoParent.length) msg += ` ${result.skippedNoParent.length} baris dilewati (department induk tidak ditemukan): ${result.skippedNoParent.slice(0, 10).join('; ')}${result.skippedNoParent.length > 10 ? ', ...' : ''}`;
+      showMsg('importMsg', msg, result.skippedNoParent.length ? 'error' : 'success');
+      setTimeout(() => goPage('subdept', 'Sub Department'), 2500);
+    } catch (e) { showMsg('importMsg', e.message, 'error'); }
   };
 };
 window.editSubDeptForm = function (kode) {
